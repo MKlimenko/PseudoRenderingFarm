@@ -1,0 +1,31 @@
+name: Check formatting
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  lint-and-zip:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install Black
+        run: pip install black
+      - name: Run Black Check
+        run: black --check PseudoRenderingFarm.py
+      - name: Zip PseudoRenderingFarm
+        run: zip PseudoRenderingFarm.zip PseudoRenderingFarm.py
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PseudoRenderingFarm-Package
+          path: PseudoRenderingFarm.zip
+          retention-days: 5
