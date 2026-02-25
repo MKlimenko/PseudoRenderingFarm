@@ -7,6 +7,7 @@ A small script to leverage parallel rendering in Blender on a single machine
 
 - [Pseudo rendering farm for Blender](#pseudo-rendering-farm-for-blender)
   - [Installation](#installation)
+  - [Usage](#usage)
   - [Description](#description)
   - [Results](#results)
 
@@ -16,6 +17,20 @@ A small script to leverage parallel rendering in Blender on a single machine
 > WIP to make an easier installation. Stay tuned.
 
 The installation is straightforward. All you need to do is download latest release from the [panel on the right](https://github.com/MKlimenko/PseudoRenderingFarm/releases) and install it in Edit -> Preferences -> Add-ons -> Install from Disk... (on the top right end of the window).
+
+## Usage
+
+After you've installed the Add-On, there is one prerequisite before starting to use it. By default, Blender sets the Output image sequence properties of `Overwrite` checked and `Placeholders` unchecked. This is useful for a regular render, but contradicts with the goals of this Add-On. In order for this plugin to work you need to uncheck `Overwrite` and check `Placeholders`. This allows individual instances to "claim" a specific file to work and forbids adjacent instances to work on the same file. There is a built-in check that'd let you know if you forgot to do that.
+
+After the installation you'd see the following user interface in the Render plane:
+
+![ui](doc/ui.png)
+
+There are four fields: 
+- Instances (with number of instances varying from 1 to 32)
+- Launch
+- Benchmark
+- Cancel
 
 ## Description
 
@@ -29,6 +44,7 @@ The result is faster rendering due to better hardware utilization. On the left h
 |---------------------------|-------------------------|
 | ![before](doc/before.png) | ![after](doc/after.png) |
 
+There's a built-in benchmark that tests the first 50 frames of the scene to give an estimation of the number of instances to use. Bear in mind, that the first 50 frames might not be fully representative and you might need to adjust it to be either bigger or smaller.
 
 ## Results
 
