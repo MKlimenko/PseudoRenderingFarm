@@ -15,7 +15,7 @@ A small script to leverage parallel rendering in Blender on a single machine
 > [!NOTE]
 > WIP to make an easier installation. Stay tuned.
 
-The installation is straightforward. All you need to do is download the Python script from this repository and install it in Edit -> Preferences -> Add-ons -> Install from Disk... (on the top right end of the window).
+The installation is straightforward. All you need to do is download latest release from the [panel on the right](https://github.com/MKlimenko/PseudoRenderingFarm/releases) and install it in Edit -> Preferences -> Add-ons -> Install from Disk... (on the top right end of the window).
 
 ## Description
 
