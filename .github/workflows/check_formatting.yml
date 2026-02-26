@@ -23,11 +23,9 @@ jobs:
         run: pip install black
       - name: Run Black Check
         run: black --check ${{ env.PROJECT_NAME }}.py
-      - name: Zip
-        run: zip ${{ env.PROJECT_NAME }}.zip ${{ env.PROJECT_NAME }}.py
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}
-          path: ${{ env.PROJECT_NAME }}.zip
+          path: ${{ env.PROJECT_NAME }}.py
           retention-days: 5
