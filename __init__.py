@@ -1,13 +1,3 @@
-bl_info = {
-    "name": "Pseudo Rendering Farm",
-    "description": "Spawns multiple background processes to render the current file.",
-    "author": "Michael Klimenko",
-    "version": (0, 8),
-    "blender": (4, 2, 0),
-    "location": "Properties > Render > Pseudo Rendering Farm",
-    "category": "Render",
-}
-
 import bpy
 import os
 import shutil
@@ -378,11 +368,17 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
                 layout.label(text=f"Ready", icon="CHECKMARK")
 
 
+classes = [
+    RENDER_OT_pseudo_rendering_farm,
+    RENDER_OT_cancel_pseudo_rendering_farm,
+    RENDER_OT_benchmarking,
+    RENDER_PT_pseudo_rendering_farm_panel,
+]
+
+
 def register():
-    bpy.utils.register_class(RENDER_OT_pseudo_rendering_farm)
-    bpy.utils.register_class(RENDER_OT_cancel_pseudo_rendering_farm)
-    bpy.utils.register_class(RENDER_OT_benchmarking)
-    bpy.utils.register_class(RENDER_PT_pseudo_rendering_farm_panel)
+    for c in classes:
+        bpy.utils.register_class(c)
     bpy.types.Scene.is_notifying = bpy.props.BoolProperty(default=False)
     bpy.types.Scene.pseudo_rendering_farm_instances = bpy.props.IntProperty(
         name="Instances", default=2, min=1, max=32
@@ -390,10 +386,8 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_class(RENDER_OT_pseudo_rendering_farm)
-    bpy.utils.unregister_class(RENDER_OT_cancel_pseudo_rendering_farm)
-    bpy.utils.unregister_class(RENDER_OT_benchmarking)
-    bpy.utils.unregister_class(RENDER_PT_pseudo_rendering_farm_panel)
+    for c in classes:
+        bpy.utils.unregister_class(c)
     del bpy.types.Scene.pseudo_rendering_farm_instances
     del bpy.types.Scene.is_notifying
 

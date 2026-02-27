@@ -22,15 +22,9 @@ The installation is straightforward. All you need to do is download latest relea
 
 After you've installed the Add-On, there is one prerequisite before starting to use it. By default, Blender sets the Output image sequence properties of `Overwrite` checked and `Placeholders` unchecked. This is useful for a regular render, but contradicts with the goals of this Add-On. In order for this plugin to work you need to uncheck `Overwrite` and check `Placeholders`. This allows individual instances to "claim" a specific file to work and forbids adjacent instances to work on the same file. There is a built-in check that'd let you know if you forgot to do that.
 
-After the installation you'd see the following user interface in the Render plane:
+After the installation you'd see the following user interface in the Render plane with the main controls:
 
 ![ui](doc/ui.png)
-
-There are four fields: 
-- Instances (with number of instances varying from 1 to 32)
-- Launch
-- Benchmark
-- Cancel
 
 ## Description
 
