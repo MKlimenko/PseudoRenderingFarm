@@ -22,10 +22,12 @@ jobs:
       - name: Install Black
         run: pip install black
       - name: Run Black Check
-        run: black --check ${{ env.PROJECT_NAME }}.py
+        run: black --check .
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}
-          path: ${{ env.PROJECT_NAME }}.py
+          path: |
+            __init__.py
+            blender_manifest.toml
           retention-days: 5
