@@ -1,0 +1,22 @@
+schema_version = "1.0.0"
+
+id = "pseudo_rendering_farm"
+version = "0.9.0"
+name = "Pseudo Rendering Farm"
+tagline = "Spawns multiple background processes to render the current file"
+maintainer = "Michael Klimenko"
+type = "add-on"
+
+website = "https://github.com/MKlimenko/PseudoRenderingFarm"
+tags = ["Render"]
+
+blender_version_min = "4.2.0"
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+[permissions]
+# Required for subprocess.POpen (launching background Blender instances)
+execute = "Required to launch background render processes"
+# Required for os.remove and tempfile (cleaning up corrupted frames and benchmarking)
+files = "Required to manage output files and temporary benchmark data"
