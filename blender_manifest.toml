@@ -16,7 +16,5 @@ license = [
 ]
 
 [permissions]
-# Required for subprocess.POpen (launching background Blender instances)
-execute = "Required to launch background render processes"
 # Required for os.remove and tempfile (cleaning up corrupted frames and benchmarking)
 files = "Required to manage output files and temporary benchmark data"
