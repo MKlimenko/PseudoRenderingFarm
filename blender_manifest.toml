@@ -18,3 +18,10 @@ license = [
 [permissions]
 # Required for os.remove and tempfile (cleaning up corrupted frames and benchmarking)
 files = "Required to manage output files and temporary benchmark data"
+
+[build]
+# excludes files/folders in builds run by Blender (`blender.exe --command extension build`).
+paths_exclude_pattern = [
+  "__pycache__/",
+  ".*",  # .gitignore + hidden folders
+]
