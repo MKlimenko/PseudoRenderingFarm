@@ -23,11 +23,15 @@ jobs:
         run: pip install black
       - name: Run Black Check
         run: black --check .
+      - name: Install Blender
+        run: sudo snap install blender --classic
+      - name: Build Blender Extension
+        run: blender --command extension build
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PROJECT_NAME }}
-          path: |
-            __init__.py
-            blender_manifest.toml
+          # could double-zip, please verify
+          path: ./*.zip
+          if-no-files-found: error
           retention-days: 5
