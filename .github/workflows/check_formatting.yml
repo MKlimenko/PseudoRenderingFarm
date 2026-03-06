@@ -28,10 +28,10 @@ jobs:
       - name: Build Blender Extension
         run: blender --command extension build
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PROJECT_NAME }}
-          # could double-zip, please verify
           path: ./*.zip
+          archive: false
           if-no-files-found: error
           retention-days: 5
