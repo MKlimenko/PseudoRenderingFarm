@@ -13,10 +13,11 @@ A small script to leverage parallel rendering in Blender on a single machine
 
 ## Installation
 
-> [!NOTE]
-> WIP to make an easier installation. Stay tuned.
+There are two ways to install this extension. The first option uses the built-in Blender functionality to locate and install the extensions. All you need to do is search for “Pseudo Rendering Farm” in Edit -> Preferences -> Get Extensions. This will also allow you to automatically install updates.
 
-The installation is straightforward. All you need to do is download latest release from the [panel on the right](https://github.com/MKlimenko/PseudoRenderingFarm/releases) and install it in Edit -> Preferences -> Add-ons -> Install from Disk... (on the top right end of the window).
+![extension](doc/installation.png)
+
+Another way is to download the latest release from the [panel on the right](https://github.com/MKlimenko/PseudoRenderingFarm/releases) and install it by navigating to Edit -> Preferences -> Add-ons -> Install from Disk… (located at the top right of the window).
 
 ## Usage
 
