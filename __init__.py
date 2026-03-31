@@ -110,8 +110,10 @@ def check_render_status():
         else:
             Globals.declining_streak += 1
 
-        if Globals.early_exit_benchmark and (
-            Globals.current_bench_instances >= 32 or Globals.declining_streak >= 2
+        if (
+            Globals.early_exit_benchmark
+            or Globals.current_bench_instances >= 16
+            or Globals.declining_streak >= 2
         ):
             best_count = max(
                 Globals.benchmark_results, key=Globals.benchmark_results.get
