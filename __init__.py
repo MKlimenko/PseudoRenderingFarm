@@ -1,5 +1,7 @@
 import bpy
 import os
+from pathlib import Path
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -339,6 +341,37 @@ UI
 """
 
 
+class RENDER_OT_open_folder(bpy.types.Operator):
+    """Open the folder with rendered data"""
+
+    bl_idname = "render.open_folder"
+    bl_label = "Open folder"
+
+    def sanitize(self, context):
+        frame_path = Path(
+            context.scene.render.frame_path(frame=context.scene.frame_current)
+        )
+        folder_path = frame_path.parent.absolute()
+        return folder_path
+
+    def execute(self, context):
+        render_path = self.sanitize(context)
+
+        if not os.path.exists(render_path):
+            print(f"Error: The folder '{render_path}' does not exist yet.")
+            return
+
+        current_os = platform.system()
+        if current_os == "Windows":
+            os.startfile(render_path)
+        elif current_os == "Darwin":
+            subprocess.run(["open", render_path])
+        else:
+            subprocess.run(["xdg-open", render_path])
+
+        return {"FINISHED"}
+
+
 class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
     bl_label = "Pseudo Rendering Farm"
     bl_idname = "RENDER_PT_pseudo_rendering_farm"
@@ -369,6 +402,12 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
         benchmark_row.operator("render.benchmarking", icon="SETTINGS")
 
         row = col.row(align=True)
+        open_row = row.row(align=True)
+        open_row.operator(
+            "render.open_folder", icon="FILE_FOLDER", text="Open render folder"
+        )
+
+        row = col.row(align=True)
         cancel_row = row.row(align=True)
         cancel_row.enabled = is_running
         cancel_row.operator(
@@ -396,6 +435,7 @@ classes = [
     RENDER_OT_pseudo_rendering_farm,
     RENDER_OT_cancel_pseudo_rendering_farm,
     RENDER_OT_benchmarking,
+    RENDER_OT_open_folder,
     RENDER_PT_pseudo_rendering_farm_panel,
 ]
 
