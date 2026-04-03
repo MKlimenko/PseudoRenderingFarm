@@ -33,7 +33,7 @@ To render each frame, Blender prepares the necessary data, sends it to the GPU a
 
 This plugin solves it by launching several background Blender instances in parallel. By using frame placeholders and disabling overwrite, each instance claims the frame and starts working on it independently.
 
-The result is faster rendering due to better hardware utilization. On the left hand side you can see that the renders are separated by an amount of time equal to the render itself. At the same time, spawning multiple instances improves the situation significantly. In this scenario, we're hitting VRAM limit sooner, so I'm planning to do more testing on platforms with more memory (NVIDIA 4060 Ti 16GB or Intel Arc Pro B50/B60).
+The result is faster rendering due to better hardware utilization. On the left hand side you can see that the renders are separated by an amount of time equal to the render itself. At the same time, spawning multiple instances improves the situation significantly, at the expense of spending more system RAM and VRAM.
 
 | Before                    | After                   |
 |---------------------------|-------------------------|
@@ -56,3 +56,5 @@ The same principle can be also applied for an animated series. Below are the col
 |--------------------------|---------|---------|---------|---------|
 | Mac Mini M1 (8GB)        | 24m41s  | 18m27s  | 21m27s  | 26m21s  |
 | NVIDIA 4070 Super (12GB) | 6m53s   | 4m25s   | 3m15s   | 2m52s   |
+| NVIDIA 4090 (24GB)       | 4m49s   | 2m41s   | 2m16s   | 1m59s   |
+| Intel Arc Pro B70 (32GB) | 8m48s   | 5m57s   | 4m07s   | 3m50s   |
