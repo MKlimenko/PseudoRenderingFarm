@@ -31,6 +31,7 @@ def create_scene():
         f"import bpy; bpy.ops.wm.read_homefile(); render_settings = bpy.context.scene.render; "
         "render_settings.use_overwrite = False; render_settings.use_placeholder = True; "
         "bpy.context.scene.frame_end = 50; "
+        "render_settings.filepath = '//out/'; "
         "render_settings.engine = 'BLENDER_EEVEE_NEXT'; "
         "bpy.ops.wm.save_as_mainfile(filepath='test_scene.blend')",
     ]
@@ -93,10 +94,10 @@ def test_pseudo_rendering_farm():
     _ = process.wait()
 
     for i in range(1, 251):
-        frame_file = os.path.join(TMP_DIR, f"{i:04d}.png")
+        frame_file = os.path.join("out/", f"{i:04d}.png")
         assert os.path.exists(frame_file), f"Missing frame: {frame_file}"
 
-    print(f"\Rendering complete. 250 frames verified in {TMP_DIR}.")
+    print(f"\nRendering run complete. 250 frames verified in out/")
 
 
 def test_run_benchmark():
