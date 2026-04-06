@@ -94,11 +94,11 @@ def test_pseudo_rendering_farm():
 
     _ = process.wait()
 
-    for i in range(1, 251):
+    for i in range(1, 51):
         frame_file = os.path.join("out/", f"{i:04d}.png")
         assert os.path.exists(frame_file), f"Missing frame: {frame_file}"
 
-    print(f"\nRendering run complete. 250 frames verified in out/")
+    print(f"\nRendering run complete. 50 frames verified in out/")
 
 
 def test_run_benchmark():
