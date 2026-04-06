@@ -19,6 +19,7 @@ def count_blender_processes():
                 count += 1
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+    print(f"Found {count} blender processes")
     return count
 
 
@@ -93,7 +94,9 @@ def test_pseudo_rendering_farm():
     print(stdout)
     print(stderr)
 
-    process.wait()
+    retcode = process.wait()
+
+    print(f"Retcode: {retcode}")
 
     for i in range(1, 251):
         frame_file = os.path.join(TMP_DIR, f"{i:04d}.png")
