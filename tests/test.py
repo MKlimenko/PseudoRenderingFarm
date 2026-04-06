@@ -6,7 +6,6 @@ import glob
 import psutil
 
 BLENDER_BIN = "blender"
-TMP_DIR = "/tmp"
 EXTENSION_ZIP_PATTERN = "../pseudo_rendering_farm*.zip"
 TEST_BLEND_FILE = "test_scene.blend"
 
@@ -31,6 +30,7 @@ def create_scene():
         "--python-expr",
         f"import bpy; bpy.ops.wm.read_homefile(); render_settings = bpy.context.scene.render; "
         "render_settings.use_overwrite = False; render_settings.use_placeholder = True; "
+        "render_settings.filepath = '//out/'; "
         "bpy.ops.wm.save_as_mainfile(filepath='test_scene.blend')",
     ]
     _ = subprocess.run(cmd, capture_output=True, text=True)
@@ -99,10 +99,10 @@ def test_pseudo_rendering_farm():
     print(f"Retcode: {retcode}")
 
     for i in range(1, 251):
-        frame_file = os.path.join(TMP_DIR, f"{i:04d}.png")
+        frame_file = os.path.join("out/", f"{i:04d}.png")
         assert os.path.exists(frame_file), f"Missing frame: {frame_file}"
 
-    print(f"\nExtension run complete. 250 frames verified in {TMP_DIR}.")
+    print(f"\nExtension run complete. 250 frames verified in out/.")
 
 
 def test_run_benchmark():
