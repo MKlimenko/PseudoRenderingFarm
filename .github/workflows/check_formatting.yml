@@ -27,8 +27,11 @@ jobs:
         run: sudo snap install blender --classic
       - name: Build Blender Extension
         run: blender --command extension build
-      - name: Install Python dependencies
-        run: pip install pytest psutil
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt-get -y libegl1 libgl1-mesa-glx libxi6 libxrender1 libxkbcommon0 xvfb
+          pip install pytest psutil
       - name: Run Pytest
         working-directory: ./tests
         run: pytest -s test.py -x
