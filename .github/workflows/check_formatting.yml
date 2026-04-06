@@ -27,8 +27,8 @@ jobs:
         run: sudo snap install blender --classic
       - name: Build Blender Extension
         run: blender --command extension build
-      - name: Install Pytest
-        run: pip install pytest
+      - name: Install Python dependencies
+        run: pip install pytest psutil
       - name: Run Pytest
         working-directory: ./tests
         run: pytest -s test.py -x
