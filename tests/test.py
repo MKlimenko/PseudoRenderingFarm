@@ -81,16 +81,19 @@ def test_pseudo_rendering_farm():
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
 
-    # time.sleep(5)
-    # blender_count = count_blender_processes()
-    # assert (
-    #     blender_count >= 2
-    # ), f"Expected at least 2 Blender processes, found {blender_count}"
+    start_check = time.time()
+    while (time.time() - start_check) < 30:
+        blender_count = count_blender_processes()
+        if blender_count >= 2:
+            break
+        time.sleep(1)
 
     stdout, stderr = process.communicate()
 
     print(stdout)
     print(stderr)
+
+    process.wait()
 
     for i in range(1, 251):
         frame_file = os.path.join(TMP_DIR, f"{i:04d}.png")
