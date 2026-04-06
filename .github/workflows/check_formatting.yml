@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt-get -y libegl1 libgl1-mesa-glx libxi6 libxrender1 libxkbcommon0 xvfb
+          sudo apt install -y libegl1 libgl1-mesa-glx libxi6 libxrender1 libxkbcommon0 xvfb
           pip install pytest psutil
       - name: Run Pytest
         working-directory: ./tests
