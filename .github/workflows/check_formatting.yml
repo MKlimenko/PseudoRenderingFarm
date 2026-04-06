@@ -30,6 +30,8 @@ jobs:
         run: brew install blender
       - name: Build Blender Extension
         run: blender --command extension build
+      - name: Install dependencies
+        run: pip install pytest psutil
       - name: Run Pytest
         working-directory: ./tests
         run: pytest -s test.py -x
