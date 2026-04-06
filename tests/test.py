@@ -32,7 +32,6 @@ def create_scene():
         "render_settings.use_overwrite = False; render_settings.use_placeholder = True; "
         "bpy.context.scene.frame_end = 50; "
         "render_settings.filepath = '//out/'; "
-        "render_settings.engine = 'BLENDER_EEVEE_NEXT'; "
         "bpy.ops.wm.save_as_mainfile(filepath='test_scene.blend')",
     ]
     _ = subprocess.run(cmd, capture_output=True, text=True)
@@ -76,6 +75,8 @@ def test_pseudo_rendering_farm():
         BLENDER_BIN,
         "-b",
         TEST_BLEND_FILE,
+        "-E",
+        "BLENDER_EEVEE_NEXT",
         "--python-expr",
         py_expr,
     ]
