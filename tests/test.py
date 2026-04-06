@@ -31,6 +31,7 @@ def create_scene():
         f"import bpy; bpy.ops.wm.read_homefile(); render_settings = bpy.context.scene.render; "
         "render_settings.use_overwrite = False; render_settings.use_placeholder = True; "
         "bpy.context.scene.frame_end = 50; "
+        "render_settings.engine = 'BLENDER_EEVEE_NEXT'; "
         "bpy.ops.wm.save_as_mainfile(filepath='test_scene.blend')",
     ]
     _ = subprocess.run(cmd, capture_output=True, text=True)
