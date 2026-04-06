@@ -1,4 +1,4 @@
-name: Check formatting
+name: Test and pack
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  lint-and-zip:
+  test-and-pack:
     runs-on: ubuntu-latest
     env:
       PROJECT_NAME: PseudoRenderingFarm
@@ -27,6 +27,9 @@ jobs:
         run: sudo snap install blender --classic
       - name: Build Blender Extension
         run: blender --command extension build
+      - name: Run Pytest
+        working-directory: ./tests
+        run: pytest -s test.py -x
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
