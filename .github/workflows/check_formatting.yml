@@ -27,7 +27,7 @@ jobs:
         id: set-up-homebrew
         uses: Homebrew/actions/setup-homebrew@main
       - name: Install Blender
-        run: brew install blender --classic
+        run: brew install blender
       - name: Build Blender Extension
         run: blender --command extension build
       # - name: Install dependencies
