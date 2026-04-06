@@ -69,7 +69,15 @@ def test_pseudo_rendering_farm():
         "bpy.ops.wm.quit_blender()"
     )
 
-    cmd = [BLENDER_BIN, "-b", TEST_BLEND_FILE, "--python-expr", py_expr]
+    cmd = [
+        BLENDER_BIN,
+        "-b",
+        TEST_BLEND_FILE,
+        "-E",
+        "BLENDER_EEVEE",
+        "--python-expr",
+        py_expr,
+    ]
 
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
