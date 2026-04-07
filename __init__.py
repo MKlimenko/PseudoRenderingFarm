@@ -24,6 +24,15 @@ class Globals:
     seconds_per_frame = 0
     declining_streak = 0
     peak_throughput = 0
+
+    gpu_detection_active = False
+    userpref_process = None
+    userpref_path = ""
+
+    dummy_scene_process = None
+
+    gpu_discovery_processes = []
+
     gpu_devices = []
     gpu_devices_envs = []
     gpu_detected = False
@@ -183,6 +192,17 @@ def check_render_status():
     return 1.0
 
 
+def check_multi_gpu_status():
+    setup_multi_gpu()
+    if Globals.gpu_configured:
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                area.tag_redraw()
+        return None
+
+    return 1.0
+
+
 def get_userpref_path():
     expr = "import bpy, os; print('USERPREF:' + os.path.join(bpy.utils.resource_path('USER'), 'config', 'userpref.blend'))"
     result = subprocess.run(
@@ -217,63 +237,86 @@ def detect_gpus():
 
 
 def setup_multi_gpu():
-    if Globals.gpu_configured:
-        return True
+    if len(Globals.userpref_path) == 0:
+        if Globals.userpref_process is None:
+            expr = "import bpy, os; print('USERPREF:' + os.path.join(bpy.utils.resource_path('USER'), 'config', 'userpref.blend'))"
 
-    if len(Globals.gpu_devices) <= 1:
-        return False
+            Globals.userpref_process = subprocess.Popen(
+                [bpy.app.binary_path, "-b", "--python-expr", expr],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return
+        status = Globals.userpref_process.poll()
+        if status is not None:
+            stdout, stderr = Globals.userpref_process.communicate()
 
-    userpref_path = get_userpref_path()
-    if not userpref_path:
-        return False
+            for line in (stdout + stderr).splitlines():
+                if line.startswith("USERPREF:"):
+                    Globals.userpref_path = line[len("USERPREF:") :]
+                    break
 
     Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
     scene_path = os.path.join(Globals.gpu_config_dir, "temp_scene.blend")
 
-    cmd = [
-        bpy.app.binary_path,
-        "-b",
-        "--python-expr",
-        f"import bpy; bpy.ops.wm.read_homefile(); bpy.ops.wm.save_as_mainfile(filepath=r'{scene_path}')",
-    ]
-    if subprocess.run(cmd, capture_output=True).returncode != 0:
-        return False
+    if not os.path.isfile(scene_path):
+        if Globals.dummy_scene_process is None:
+            expr = f"import bpy; bpy.ops.wm.read_homefile(); bpy.ops.wm.save_as_mainfile(filepath=r'{scene_path}')"
 
-    Globals.gpu_devices_envs = []
-    for i, gpu_name in enumerate(Globals.gpu_devices):
-        gpu_dir = os.path.join(Globals.gpu_config_dir, f"gpu_{i}")
-        os.makedirs(gpu_dir, exist_ok=True)
-        shutil.copy2(userpref_path, os.path.join(gpu_dir, "userpref.blend"))
+            Globals.dummy_scene_process = subprocess.Popen(
+                [bpy.app.binary_path, "-b", "--python-expr", expr],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return
+        status = Globals.dummy_scene_process.poll()
+        if status is None:
+            return
 
-        env = os.environ.copy()
-        env["BLENDER_USER_CONFIG"] = gpu_dir
+    if Globals.gpu_discovery_processes is None:
+        Globals.gpu_devices_envs = []
+        for i, gpu_name in enumerate(Globals.gpu_devices):
+            gpu_dir = os.path.join(Globals.gpu_config_dir, f"gpu_{i}")
+            os.makedirs(gpu_dir, exist_ok=True)
+            shutil.copy2(Globals.userpref_path, os.path.join(gpu_dir, "userpref.blend"))
 
-        cmd = [
-            bpy.app.binary_path,
-            scene_path,
-            "-b",
-            "-s",
-            "1",
-            "-e",
-            "1",
-            "-a",
-            "--python-expr",
-            f"import bpy; bpy.context.preferences.system.gpu_preferred_device = '{gpu_name}'; bpy.ops.wm.save_userpref(); bpy.ops.wm.quit_blender()",
-        ]
-        result = subprocess.run(cmd, env=env, capture_output=True)
-        if result.returncode != 0:
-            print(
-                f"PseudoRenderingFarm: Warning: GPU {i} ({gpu_name}) config may have failed"
+            env = os.environ.copy()
+            env["BLENDER_USER_CONFIG"] = gpu_dir
+
+            cmd = [
+                bpy.app.binary_path,
+                scene_path,
+                "-b",
+                "-s",
+                "1",
+                "-e",
+                "1",
+                "-a",
+                "--python-expr",
+                f"import bpy; bpy.context.preferences.system.gpu_preferred_device = '{gpu_name}'; bpy.ops.wm.save_userpref(); bpy.ops.wm.quit_blender()",
+            ]
+            Globals.gpu_discovery_processes.append(
+                subprocess.Popen(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
             )
 
-        Globals.gpu_devices_envs.append(env)
+            Globals.gpu_devices_envs.append(env)
 
-    if not Globals.gpu_devices_envs:
-        Globals.gpu_devices_envs = [os.environ.copy()]
-        return False
+        if not Globals.gpu_devices_envs:
+            Globals.gpu_devices_envs = [os.environ.copy()]
+            return
 
-    Globals.gpu_configured = True
-    return True
+    if all(p.poll() is not None for p in Globals.gpu_discovery_processes):
+        Globals.gpu_configured = True
+    return
 
 
 def cleanup_gpu_config():
@@ -468,8 +511,10 @@ class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
     bl_label = "Setup multi-GPU"
 
     def execute(self, context):
-        if not setup_multi_gpu():
-            return {"CANCELLED"}
+        Globals.gpu_detection_active = True
+
+        if not bpy.app.timers.is_registered(check_multi_gpu_status):
+            bpy.app.timers.register(check_multi_gpu_status)
 
         for area in context.screen.areas:
             area.tag_redraw()
@@ -549,7 +594,7 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
         if len(Globals.gpu_devices) > 1:
             if not Globals.gpu_configured:
                 gpu_row = col.row(align=True)
-                gpu_row.enabled = not is_running
+                gpu_row.enabled = not is_running and not Globals.gpu_detection_active
                 gpu_row.operator("render.setup_multi_gpu", icon="LIGHT")
 
         row = col.row(align=True)
