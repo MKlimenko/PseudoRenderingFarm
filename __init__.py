@@ -251,6 +251,12 @@ def setup_multi_gpu():
         cmd = [
             bpy.app.binary_path,
             scene_path,
+            "-b",
+            "-s",
+            "1",
+            "-e",
+            "1",
+            "-a",
             "--python-expr",
             f"import bpy; bpy.context.preferences.system.gpu_preferred_device = '{gpu_name}'; bpy.ops.wm.save_userpref(); bpy.ops.wm.quit_blender()",
         ]
@@ -456,6 +462,7 @@ Multi-GPU setup
 
 
 class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
+    """Detect and setup multiple GPUs for parallel rendering"""
 
     bl_idname = "render.setup_multi_gpu"
     bl_label = "Setup multi-GPU"
