@@ -1,4 +1,5 @@
 import bpy
+import math
 import os
 from pathlib import Path
 import platform
@@ -315,6 +316,21 @@ def get_env_for_instance(index):
     return Globals.gpu_devices_envs[index % len(Globals.gpu_devices_envs)]
 
 
+def get_worker_subrange(start_idx, end_idx, num_workers, worker_id):
+    total_elements = end_idx - start_idx + 1
+
+    if total_elements <= 0 or worker_id >= num_workers:
+        return None
+
+    chunk_size = math.ceil(total_elements / num_workers)
+    sub_start = start_idx + (worker_id * chunk_size)
+    sub_end = sub_start + chunk_size - 1
+    if sub_start > end_idx:
+        return None
+    sub_end = min(sub_end, end_idx)
+    return (sub_start, sub_end)
+
+
 """
 Rendering
 """
@@ -328,15 +344,6 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        rd = scene.render
-
-        if rd.use_overwrite:
-            self.report({"ERROR"}, "Validation Failed: 'Overwrite' must be UNCHECKED")
-            return {"CANCELLED"}
-
-        if not rd.use_placeholder:
-            self.report({"ERROR"}, "Validation Failed: 'Placeholders' must be CHECKED")
-            return {"CANCELLED"}
 
         if not bpy.data.filepath:
             self.report({"ERROR"}, "Please save the scene")
@@ -356,12 +363,22 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
 
         for i in range(num_instances):
             try:
+                subrange = get_worker_subrange(
+                    scene.frame_start, scene.frame_end, num_instances, i
+                )
+                if not subrange:
+                    continue
+                subrange_start, subrange_end = subrange
                 Globals.active_render_processes.append(
                     subprocess.Popen(
                         [
                             blender_exe,
                             "-b",
                             file_path,
+                            "-s",
+                            str(subrange_start),
+                            "-e",
+                            str(subrange_end),
                             "-a",
                         ],
                         env=get_env_for_instance(i),
@@ -429,6 +446,16 @@ def launch_benchmark_iteration(context):
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     for i in range(Globals.current_bench_instances):
+
+        subrange = get_worker_subrange(
+            scene.frame_start,
+            frame_start + Globals.benchmark_frames - 1,
+            Globals.current_bench_instances,
+            i,
+        )
+        if not subrange:
+            continue
+        subrange_start, subrange_end = subrange
         cmd = [
             exe,
             "-b",
@@ -436,9 +463,9 @@ def launch_benchmark_iteration(context):
             "-o",
             out_path,
             "-s",
-            str(frame_start),
+            str(subrange_start),
             "-e",
-            str(frame_start + Globals.benchmark_frames - 1),
+            str(subrange_end),
             "-a",
         ]
 
@@ -458,16 +485,6 @@ class RENDER_OT_benchmarking(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        rd = scene.render
-
-        if rd.use_overwrite:
-            self.report({"ERROR"}, "Validation Failed: 'Overwrite' must be UNCHECKED")
-            return {"CANCELLED"}
-
-        if not rd.use_placeholder:
-            self.report({"ERROR"}, "Validation Failed: 'Placeholders' must be CHECKED")
-            return {"CANCELLED"}
-
         if not bpy.data.filepath:
             self.report({"ERROR"}, "Save file before benchmarking.")
             return {"CANCELLED"}
