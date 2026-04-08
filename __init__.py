@@ -203,19 +203,6 @@ def check_multi_gpu_status():
     return 1.0
 
 
-def get_userpref_path():
-    expr = "import bpy, os; print('USERPREF:' + os.path.join(bpy.utils.resource_path('USER'), 'config', 'userpref.blend'))"
-    result = subprocess.run(
-        [bpy.app.binary_path, "-b", "--python-expr", expr],
-        capture_output=True,
-        text=True,
-    )
-    for line in (result.stdout + result.stderr).splitlines():
-        if line.startswith("USERPREF:"):
-            return line[len("USERPREF:") :]
-    return None
-
-
 def detect_gpus():
     if Globals.gpu_detected:
         return
@@ -237,7 +224,7 @@ def detect_gpus():
 
 
 def setup_multi_gpu():
-    if len(Globals.userpref_path) == 0:
+    if not Globals.userpref_path:
         if Globals.userpref_process is None:
             expr = "import bpy, os; print('USERPREF:' + os.path.join(bpy.utils.resource_path('USER'), 'config', 'userpref.blend'))"
 
@@ -255,7 +242,7 @@ def setup_multi_gpu():
             for line in (stdout + stderr).splitlines():
                 if line.startswith("USERPREF:"):
                     Globals.userpref_path = line[len("USERPREF:") :]
-                    break
+                    return
 
     if Globals.gpu_config_dir:
         Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
@@ -371,7 +358,12 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
             try:
                 Globals.active_render_processes.append(
                     subprocess.Popen(
-                        [blender_exe, "-b", file_path, "-a"],
+                        [
+                            blender_exe,
+                            "-b",
+                            file_path,
+                            "-a",
+                        ],
                         env=get_env_for_instance(i),
                     )
                 )
