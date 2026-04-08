@@ -257,7 +257,8 @@ def setup_multi_gpu():
                     Globals.userpref_path = line[len("USERPREF:") :]
                     break
 
-    Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
+    if Globals.gpu_config_dir:
+        Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
     scene_path = os.path.join(Globals.gpu_config_dir, "temp_scene.blend")
 
     if not os.path.isfile(scene_path):
@@ -275,7 +276,7 @@ def setup_multi_gpu():
         if status is None:
             return
 
-    if Globals.gpu_discovery_processes is None:
+    if len(Globals.gpu_discovery_processes) == 0:
         Globals.gpu_devices_envs = []
         for i, gpu_name in enumerate(Globals.gpu_devices):
             gpu_dir = os.path.join(Globals.gpu_config_dir, f"gpu_{i}")
@@ -288,12 +289,6 @@ def setup_multi_gpu():
             cmd = [
                 bpy.app.binary_path,
                 scene_path,
-                "-b",
-                "-s",
-                "1",
-                "-e",
-                "1",
-                "-a",
                 "--python-expr",
                 f"import bpy; bpy.context.preferences.system.gpu_preferred_device = '{gpu_name}'; bpy.ops.wm.save_userpref(); bpy.ops.wm.quit_blender()",
             ]
@@ -301,7 +296,6 @@ def setup_multi_gpu():
                 subprocess.Popen(
                     cmd,
                     env=env,
-                    capture_output=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
