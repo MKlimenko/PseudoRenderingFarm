@@ -91,7 +91,7 @@ def cleanup_bench_dir():
     if Globals.bench_temp_dir and os.path.exists(Globals.bench_temp_dir):
         try:
             shutil.rmtree(Globals.bench_temp_dir)
-        except:
+        except Exception:
             pass
         Globals.bench_temp_dir = ""
 
@@ -148,7 +148,7 @@ def check_render_status():
                     icon="CHECKMARK",
                 )
 
-            print(f"PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
+            print("PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
             print(Globals.benchmark_results)
 
             bpy.context.window_manager.popup_menu(
@@ -210,7 +210,10 @@ def detect_gpus():
     Globals.gpu_devices_envs = [os.environ.copy()]
 
     try:
-        if "VULKAN" not in bpy.context.preferences.system.gpu_backend:
+        if (
+            platform.system() != "Darwin"
+            and "VULKAN" not in bpy.context.preferences.system.gpu_backend
+        ):
             print("PseudoRenderingFarm: Non-Vulkan backend, multi-GPU not available")
             return
         try:
@@ -244,7 +247,7 @@ def setup_multi_gpu():
                     Globals.userpref_path = line[len("USERPREF:") :]
                     return
 
-    if Globals.gpu_config_dir:
+    if not Globals.gpu_config_dir:
         Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
     scene_path = os.path.join(Globals.gpu_config_dir, "temp_scene.blend")
 
@@ -263,7 +266,7 @@ def setup_multi_gpu():
         if status is None:
             return
 
-    if len(Globals.gpu_discovery_processes) == 0:
+    if not Globals.gpu_discovery_processes:
         Globals.gpu_devices_envs = []
         for i, gpu_name in enumerate(Globals.gpu_devices):
             gpu_dir = os.path.join(Globals.gpu_config_dir, f"gpu_{i}")
@@ -315,9 +318,7 @@ def get_env_for_instance(index):
     return Globals.gpu_devices_envs[index % len(Globals.gpu_devices_envs)]
 
 
-"""
-Rendering
-"""
+# --- Rendering ---
 
 
 class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
@@ -344,7 +345,7 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
 
         bpy.ops.wm.save_mainfile()
         blender_exe = bpy.app.binary_path
-        file_path = bpy.data.filepath
+        blend_path = bpy.data.filepath
         num_instances = scene.pseudo_rendering_farm_instances
 
         Globals.active_render_processes.clear()
@@ -355,20 +356,13 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
             bpy.app.timers.register(check_render_status)
 
         for i in range(num_instances):
+            cmd = [blender_exe, "-b", blend_path, "-a"]
             try:
                 Globals.active_render_processes.append(
-                    subprocess.Popen(
-                        [
-                            blender_exe,
-                            "-b",
-                            file_path,
-                            "-a",
-                        ],
-                        env=get_env_for_instance(i),
-                    )
+                    subprocess.Popen(cmd, env=get_env_for_instance(i))
                 )
             except Exception as e:
-                self.report({"ERROR"}, f"Failed to launch instance {i}: {str(e)}")
+                self.report({"ERROR"}, f"Failed to launch instance {i}: {e}")
 
         self.report({"INFO"}, f"Launched {num_instances} render instances.")
         return {"FINISHED"}
@@ -406,16 +400,14 @@ class RENDER_OT_cancel_pseudo_rendering_farm(bpy.types.Operator):
         return {"FINISHED"}
 
 
-"""
-Benchmarking
-"""
+# --- Benchmarking ---
 
 
 def launch_benchmark_iteration(context):
     """Spawns processes for the current benchmark step."""
     Globals.start_time = time.time()
-    exe = bpy.app.binary_path
-    blend = bpy.data.filepath
+    blender_exe = bpy.app.binary_path
+    blend_path = bpy.data.filepath
     scene = bpy.context.scene
     frame_start = scene.frame_start
     frame_end = scene.frame_end
@@ -430,9 +422,9 @@ def launch_benchmark_iteration(context):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     for i in range(Globals.current_bench_instances):
         cmd = [
-            exe,
+            blender_exe,
             "-b",
-            blend,
+            blend_path,
             "-o",
             out_path,
             "-s",
@@ -485,9 +477,7 @@ class RENDER_OT_benchmarking(bpy.types.Operator):
         return {"FINISHED"}
 
 
-"""
-Multi-GPU setup
-"""
+# --- Multi-GPU setup ---
 
 
 class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
@@ -507,9 +497,7 @@ class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
         return {"FINISHED"}
 
 
-"""
-UI
-"""
+# --- UI ---
 
 
 class RENDER_OT_open_folder(bpy.types.Operator):
@@ -529,7 +517,7 @@ class RENDER_OT_open_folder(bpy.types.Operator):
         render_path = self.sanitize(context)
 
         if not os.path.exists(render_path):
-            return
+            return {"CANCELLED"}
 
         current_os = platform.system()
         if current_os == "Windows":
@@ -611,7 +599,7 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
                     icon="CHECKMARK",
                 )
             else:
-                layout.label(text=f"Ready", icon="CHECKMARK")
+                layout.label(text="Ready", icon="CHECKMARK")
 
 
 classes = [
