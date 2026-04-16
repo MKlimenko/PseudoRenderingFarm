@@ -159,13 +159,14 @@ def check_render_status():
             print("PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
             print(Globals.benchmark_results)
 
-            bpy.context.window_manager.popup_menu(
-                draw_popup, title="Benchmark Complete", icon="RENDER_RESULT"
-            )
+            if not bpy.app.background:
+                bpy.context.window_manager.popup_menu(
+                    draw_popup, title="Benchmark Complete", icon="RENDER_RESULT"
+                )
 
-            for window in bpy.context.window_manager.windows:
-                for area in window.screen.areas:
-                    area.tag_redraw()
+                for window in bpy.context.window_manager.windows:
+                    for area in window.screen.areas:
+                        area.tag_redraw()
 
             return None
         else:
@@ -189,12 +190,16 @@ def check_render_status():
                 icon="CHECKMARK",
             )
 
-        bpy.context.window_manager.popup_menu(
-            draw_popup, title="Pseudo Rendering Farm Complete", icon="RENDER_ANIMATION"
-        )
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                area.tag_redraw()
+        if not bpy.app.background:
+            bpy.context.window_manager.popup_menu(
+                draw_popup,
+                title="Pseudo Rendering Farm Complete",
+                icon="RENDER_ANIMATION",
+            )
+            for window in bpy.context.window_manager.windows:
+                for area in window.screen.areas:
+                    area.tag_redraw()
+
         return None
 
     return 1.0
