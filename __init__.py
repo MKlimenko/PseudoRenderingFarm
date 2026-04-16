@@ -109,13 +109,6 @@ def terminate_all_processes():
     Globals.active_render_processes.clear()
 
 
-def get_max_benchmark_instances():
-    try:
-        return int(os.environ.get("PRF_MAX_BENCHMARK_INSTANCES", "16"))
-    except ValueError:
-        return 16
-
-
 def check_render_status():
     for proc in Globals.active_render_processes[:]:
         if proc.poll() is not None:
@@ -137,7 +130,7 @@ def check_render_status():
 
         if (
             Globals.early_exit_benchmark
-            or Globals.current_bench_instances >= get_max_benchmark_instances()
+            or Globals.current_bench_instances >= 16
             or Globals.declining_streak >= 2 * max(len(Globals.gpu_devices), 1)
         ):
             best_count = max(
