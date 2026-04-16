@@ -1,4 +1,5 @@
 import bpy
+import math
 import os
 from pathlib import Path
 import platform
@@ -91,7 +92,7 @@ def cleanup_bench_dir():
     if Globals.bench_temp_dir and os.path.exists(Globals.bench_temp_dir):
         try:
             shutil.rmtree(Globals.bench_temp_dir)
-        except:
+        except Exception:
             pass
         Globals.bench_temp_dir = ""
 
@@ -148,7 +149,7 @@ def check_render_status():
                     icon="CHECKMARK",
                 )
 
-            print(f"PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
+            print("PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
             print(Globals.benchmark_results)
 
             bpy.context.window_manager.popup_menu(
@@ -210,7 +211,10 @@ def detect_gpus():
     Globals.gpu_devices_envs = [os.environ.copy()]
 
     try:
-        if "VULKAN" not in bpy.context.preferences.system.gpu_backend:
+        if (
+            platform.system() != "Darwin"
+            and "VULKAN" not in bpy.context.preferences.system.gpu_backend
+        ):
             print("PseudoRenderingFarm: Non-Vulkan backend, multi-GPU not available")
             return
         try:
@@ -244,7 +248,7 @@ def setup_multi_gpu():
                     Globals.userpref_path = line[len("USERPREF:") :]
                     return
 
-    if Globals.gpu_config_dir:
+    if not Globals.gpu_config_dir:
         Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
     scene_path = os.path.join(Globals.gpu_config_dir, "temp_scene.blend")
 
@@ -263,7 +267,7 @@ def setup_multi_gpu():
         if status is None:
             return
 
-    if len(Globals.gpu_discovery_processes) == 0:
+    if not Globals.gpu_discovery_processes:
         Globals.gpu_devices_envs = []
         for i, gpu_name in enumerate(Globals.gpu_devices):
             gpu_dir = os.path.join(Globals.gpu_config_dir, f"gpu_{i}")
@@ -315,9 +319,69 @@ def get_env_for_instance(index):
     return Globals.gpu_devices_envs[index % len(Globals.gpu_devices_envs)]
 
 
-"""
-Rendering
-"""
+def get_worker_subrange(start_idx, end_idx, num_workers, worker_id):
+    total_elements = end_idx - start_idx + 1
+
+    if total_elements <= 0 or worker_id >= num_workers:
+        return None
+
+    chunk_size = math.ceil(total_elements / num_workers)
+    sub_start = start_idx + (worker_id * chunk_size)
+    sub_end = sub_start + chunk_size - 1
+    if sub_start > end_idx:
+        return None
+    sub_end = min(sub_end, end_idx)
+    return (sub_start, sub_end)
+
+
+def get_worker_subrange(start_idx, end_idx, num_workers, worker_id):
+    total_elements = end_idx - start_idx + 1
+
+    if total_elements <= 0 or worker_id >= num_workers:
+        return None
+
+    chunk_size = math.ceil(total_elements / num_workers)
+    sub_start = start_idx + (worker_id * chunk_size)
+    sub_end = sub_start + chunk_size - 1
+    if sub_start > end_idx:
+        return None
+    sub_end = min(sub_end, end_idx)
+    return (sub_start, sub_end)
+
+
+def using_same_gpus():
+    # "10de/2783/0" -> vendor_id/device_id/device_num
+    if not Globals.gpu_devices:
+        return True
+    prefixes = {s.rsplit("/", 1)[0] for s in Globals.gpu_devices}
+
+    return len(prefixes) <= 1
+
+
+def is_system_balanced():
+    return len(Globals.gpu_devices) <= 1 or using_same_gpus()
+
+
+def is_scene_configured(extension_obj, scene_render):
+    if is_system_balanced():
+        return True
+
+    if scene_render.use_overwrite:
+        extension_obj.report(
+            {"ERROR"},
+            "Validation Failed: 'Overwrite' must be UNCHECKED for multi-GPU systems with different GPUs",
+        )
+        return False
+    if not scene_render.use_placeholder:
+        extension_obj.report(
+            {"ERROR"},
+            "Validation Failed: 'Placeholders' must be CHECKED for multi-GPU systems with different GPUs",
+        )
+        return False
+    return True
+
+
+# --- Rendering ---
 
 
 class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
@@ -328,14 +392,8 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        rd = scene.render
 
-        if rd.use_overwrite:
-            self.report({"ERROR"}, "Validation Failed: 'Overwrite' must be UNCHECKED")
-            return {"CANCELLED"}
-
-        if not rd.use_placeholder:
-            self.report({"ERROR"}, "Validation Failed: 'Placeholders' must be CHECKED")
+        if not is_scene_configured(self, scene.render):
             return {"CANCELLED"}
 
         if not bpy.data.filepath:
@@ -344,7 +402,7 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
 
         bpy.ops.wm.save_mainfile()
         blender_exe = bpy.app.binary_path
-        file_path = bpy.data.filepath
+        blend_path = bpy.data.filepath
         num_instances = scene.pseudo_rendering_farm_instances
 
         Globals.active_render_processes.clear()
@@ -355,20 +413,25 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
             bpy.app.timers.register(check_render_status)
 
         for i in range(num_instances):
+            cmd = [blender_exe, "-b", blend_path, "-a"]
             try:
-                Globals.active_render_processes.append(
-                    subprocess.Popen(
-                        [
-                            blender_exe,
-                            "-b",
-                            file_path,
-                            "-a",
-                        ],
-                        env=get_env_for_instance(i),
+                if is_system_balanced():
+                    subrange = get_worker_subrange(
+                        scene.frame_start, scene.frame_end, num_instances, i
                     )
+                    if not subrange:
+                        continue
+                    subrange_start, subrange_end = subrange
+                    cmd = (
+                        cmd[:-1]
+                        + ["-s", str(subrange_start), "-e", str(subrange_end)]
+                        + cmd[-1:]
+                    )
+                Globals.active_render_processes.append(
+                    subprocess.Popen(cmd, env=get_env_for_instance(i))
                 )
             except Exception as e:
-                self.report({"ERROR"}, f"Failed to launch instance {i}: {str(e)}")
+                self.report({"ERROR"}, f"Failed to launch instance {i}: {e}")
 
         self.report({"INFO"}, f"Launched {num_instances} render instances.")
         return {"FINISHED"}
@@ -406,16 +469,14 @@ class RENDER_OT_cancel_pseudo_rendering_farm(bpy.types.Operator):
         return {"FINISHED"}
 
 
-"""
-Benchmarking
-"""
+# --- Benchmarking ---
 
 
 def launch_benchmark_iteration(context):
     """Spawns processes for the current benchmark step."""
     Globals.start_time = time.time()
-    exe = bpy.app.binary_path
-    blend = bpy.data.filepath
+    blender_exe = bpy.app.binary_path
+    blend_path = bpy.data.filepath
     scene = bpy.context.scene
     frame_start = scene.frame_start
     frame_end = scene.frame_end
@@ -429,18 +490,22 @@ def launch_benchmark_iteration(context):
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     for i in range(Globals.current_bench_instances):
-        cmd = [
-            exe,
-            "-b",
-            blend,
-            "-o",
-            out_path,
-            "-s",
-            str(frame_start),
-            "-e",
-            str(frame_start + Globals.benchmark_frames - 1),
-            "-a",
-        ]
+        cmd = [blender_exe, "-b", blend_path, "-o", out_path, "-a"]
+        if is_system_balanced():
+            subrange = get_worker_subrange(
+                scene.frame_start,
+                frame_start + Globals.benchmark_frames - 1,
+                Globals.current_bench_instances,
+                i,
+            )
+            if not subrange:
+                continue
+            subrange_start, subrange_end = subrange
+            cmd = (
+                cmd[:-1]
+                + ["-s", str(subrange_start), "-e", str(subrange_end)]
+                + cmd[-1:]
+            )
 
         Globals.active_render_processes.append(
             subprocess.Popen(cmd, env=get_env_for_instance(i))
@@ -457,15 +522,7 @@ class RENDER_OT_benchmarking(bpy.types.Operator):
     bl_label = "Launch benchmark"
 
     def execute(self, context):
-        scene = context.scene
-        rd = scene.render
-
-        if rd.use_overwrite:
-            self.report({"ERROR"}, "Validation Failed: 'Overwrite' must be UNCHECKED")
-            return {"CANCELLED"}
-
-        if not rd.use_placeholder:
-            self.report({"ERROR"}, "Validation Failed: 'Placeholders' must be CHECKED")
+        if not is_scene_configured(self, context.scene.render):
             return {"CANCELLED"}
 
         if not bpy.data.filepath:
@@ -485,9 +542,7 @@ class RENDER_OT_benchmarking(bpy.types.Operator):
         return {"FINISHED"}
 
 
-"""
-Multi-GPU setup
-"""
+# --- Multi-GPU setup ---
 
 
 class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
@@ -507,9 +562,7 @@ class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
         return {"FINISHED"}
 
 
-"""
-UI
-"""
+# --- UI ---
 
 
 class RENDER_OT_open_folder(bpy.types.Operator):
@@ -529,7 +582,7 @@ class RENDER_OT_open_folder(bpy.types.Operator):
         render_path = self.sanitize(context)
 
         if not os.path.exists(render_path):
-            return
+            return {"CANCELLED"}
 
         current_os = platform.system()
         if current_os == "Windows":
@@ -611,7 +664,7 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
                     icon="CHECKMARK",
                 )
             else:
-                layout.label(text=f"Ready", icon="CHECKMARK")
+                layout.label(text="Ready", icon="CHECKMARK")
 
 
 classes = [
