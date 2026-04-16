@@ -11,6 +11,7 @@ jobs:
     runs-on: macos-latest
     env:
       PROJECT_NAME: PseudoRenderingFarm
+      PRF_MAX_BENCHMARK_INSTANCES: 2
 
     steps:
       - name: Checkout code
