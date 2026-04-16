@@ -29,6 +29,8 @@ If you're using the Vulkan backend, you can try an experimental multi-GPU setup.
 
 ![ui_multi_gpu](doc/ui_multi_gpu.png)
 
+In case of unbalanced system (different GPUs), one device might be significantly faster than another, imagine integrated graphics paired with a powerful discrete GPU. In that case, the original approach with `Overwrite` checked and `Placeholders` unchecked is still required, so that the devices can work at their own pace. For regular renders this requirement is lifted as of version 1.1.1.
+
 ## Description
 
 To render each frame, Blender prepares the necessary data, sends it to the GPU and triggers the computations. With modern hardware and simple enough scene, the overhead of preparation might be similar or even exceeding the time it takes to produce a frame.
