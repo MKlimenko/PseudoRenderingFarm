@@ -113,8 +113,11 @@ def test_run_benchmark():
     cmd = [BLENDER_BIN, "-b", TEST_BLEND_FILE, "--python-expr", py_expr]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
-    print(result.stdout)
-    assert "!!! Benchmarking stats for nerds !!!" in result.stdout
+    benchmark_result_str = "!!! Benchmarking stats for nerds !!!"
+    assert benchmark_result_str in result.stdout
+    for line in result.stdout.splitlines():
+        if line.startswith("{1: ") or benchmark_result_str in line:
+            print(line)
     print("\nBenchmark stats found in output.")
 
 
