@@ -111,7 +111,7 @@ def terminate_all_processes():
 
 def get_max_benchmark_instances():
     try:
-        int(os.environ.get("PRF_MAX_BENCHMARK_INSTANCES", "16"))
+        return int(os.environ.get("PRF_MAX_BENCHMARK_INSTANCES", "16"))
     except ValueError:
         return 16
 
