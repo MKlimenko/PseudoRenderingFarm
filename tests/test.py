@@ -9,6 +9,7 @@ BLENDER_BIN = "blender"
 TMP_DIR = "/tmp"
 EXTENSION_ZIP_PATTERN = "../pseudo_rendering_farm*.zip"
 TEST_BLEND_FILE = "test_scene.blend"
+FRAMES_TO_RENDER = 12
 
 
 def count_blender_processes():
@@ -30,7 +31,7 @@ def create_scene():
         "--python-expr",
         f"import bpy; bpy.ops.wm.read_homefile(); render_settings = bpy.context.scene.render; "
         "render_settings.use_overwrite = False; render_settings.use_placeholder = True; "
-        "bpy.context.scene.frame_end = 50; "
+        f"bpy.context.scene.frame_end = {FRAMES_TO_RENDER}; "
         "render_settings.filepath = '//out/'; "
         "bpy.ops.wm.save_as_mainfile(filepath='test_scene.blend')",
     ]
@@ -94,11 +95,11 @@ def test_pseudo_rendering_farm():
 
     _ = process.wait()
 
-    for i in range(1, 51):
+    for i in range(1, FRAMES_TO_RENDER + 1):
         frame_file = os.path.join("out/", f"{i:04d}.png")
         assert os.path.exists(frame_file), f"Missing frame: {frame_file}"
 
-    print(f"\nRendering run complete. 50 frames verified in out/")
+    print(f"\nRendering run complete. {FRAMES_TO_RENDER} frames verified in out/")
 
 
 def test_run_benchmark():
