@@ -608,6 +608,9 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
     bl_context = "render"
 
     def draw(self, context):
+        if not Globals.gpu_devices:
+            detect_gpus()
+
         layout = self.layout
         scene = context.scene
 
@@ -688,7 +691,6 @@ def register():
     bpy.types.Scene.pseudo_rendering_farm_instances = bpy.props.IntProperty(
         name="Instances", default=2, min=1, max=32
     )
-    detect_gpus()
 
 
 def unregister():
