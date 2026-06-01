@@ -66,3 +66,7 @@ The same principle can be also applied for an animated series. Below are the col
 | NVIDIA 4060 (8GB) + <br> NVIDIA 3060 (8GB) | 6m31s   | 3m33s   | 2m50s   | 2m16s   |
 
 Adding a second GPU solves the VRAM limitation, allowing to increase the number of parallel renders and speed things up.
+
+### Copyright Information
+
+Please don't forget that if you fork or distribute this extension, GPLv3 requires that you maintain original author attribution in the manifest and source files.
