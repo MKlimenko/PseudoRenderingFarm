@@ -14,7 +14,6 @@ class Globals:
     active_render_processes = []
     is_rendering_active = False
     is_benchmarking = False
-    early_exit_benchmark = False
     bench_status_msg = ""
     current_bench_instances = 1
     benchmark_frames = 1
@@ -39,11 +38,15 @@ class Globals:
     gpu_detected = False
     gpu_configured = False
     gpu_config_dir = ""
+    gpu_setup_error = ""
+
+
+VALIDATED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".exr"}
 
 
 def is_image_valid(filepath):
     """Checks if an image file is complete by looking for format-specific footers."""
-    if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+    if not os.path.exists(filepath) or os.path.getsize(filepath) < 10:
         return False
 
     ext = os.path.splitext(filepath)[1].lower()
@@ -71,19 +74,27 @@ def cleanup_corrupted_frames():
     output_path = bpy.path.abspath(scene.render.filepath)
     output_dir = os.path.dirname(output_path)
 
-    if not os.path.exists(output_dir):
-        return
+    if not os.path.isdir(output_dir):
+        return 0
 
     deleted_count = 0
     for filename in os.listdir(output_dir):
         file_path = os.path.join(output_dir, filename)
-        if os.path.isfile(file_path):
-            if not is_image_valid(file_path):
-                try:
-                    os.remove(file_path)
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"PseudoRenderingFarm: Failed to delete {filename}: {e}")
+        if not os.path.isfile(file_path):
+            continue
+        if os.path.splitext(filename)[1].lower() not in VALIDATED_EXTENSIONS:
+            continue
+        try:
+            if os.path.getmtime(file_path) < Globals.start_time:
+                continue
+        except OSError:
+            continue
+        if not is_image_valid(file_path):
+            try:
+                os.remove(file_path)
+                deleted_count += 1
+            except Exception as e:
+                print(f"PseudoRenderingFarm: Failed to delete {filename}: {e}")
 
     return deleted_count
 
@@ -114,9 +125,7 @@ def check_render_status():
         if proc.poll() is not None:
             Globals.active_render_processes.remove(proc)
 
-    if Globals.early_exit_benchmark or (
-        Globals.is_benchmarking and not Globals.active_render_processes
-    ):
+    if Globals.is_benchmarking and not Globals.active_render_processes:
         elapsed = time.time() - Globals.start_time
         throughput = Globals.benchmark_frames / max(elapsed, 0.001)
 
@@ -129,8 +138,7 @@ def check_render_status():
             Globals.declining_streak += 1
 
         if (
-            Globals.early_exit_benchmark
-            or Globals.current_bench_instances >= 16
+            Globals.current_bench_instances >= 16
             or Globals.declining_streak >= 2 * max(len(Globals.gpu_devices), 1)
         ):
             best_count = max(
@@ -139,7 +147,6 @@ def check_render_status():
             bpy.context.scene.pseudo_rendering_farm_instances = best_count
 
             Globals.is_benchmarking = False
-            Globals.early_exit_benchmark = False
             Globals.bench_status_msg = f"Optimal found: {best_count}"
             cleanup_bench_dir()
 
@@ -195,12 +202,16 @@ def check_render_status():
 
         return None
 
+    if not Globals.is_benchmarking and not Globals.active_render_processes:
+        return None
+
     return 1.0
 
 
 def check_multi_gpu_status():
     setup_multi_gpu()
-    if Globals.gpu_configured:
+    if Globals.gpu_configured or Globals.gpu_setup_error:
+        Globals.gpu_detection_active = False
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:
                 area.tag_redraw()
@@ -212,18 +223,21 @@ def check_multi_gpu_status():
 def detect_gpus():
     if Globals.gpu_detected:
         return
+    try:
+        system_prefs = bpy.context.preferences.system
+    except AttributeError:
+        # bpy.context can be restricted while add-ons are registered during
+        # startup; retry_detect_gpus will call again once it is available
+        return
     Globals.gpu_detected = True
     Globals.gpu_devices_envs = [os.environ.copy()]
 
     try:
-        if (
-            platform.system() != "Darwin"
-            and "VULKAN" not in bpy.context.preferences.system.gpu_backend
-        ):
+        if platform.system() != "Darwin" and "VULKAN" not in system_prefs.gpu_backend:
             print("PseudoRenderingFarm: Non-Vulkan backend, multi-GPU not available")
             return
         try:
-            bpy.context.preferences.system.gpu_preferred_device = "___invalid___"
+            system_prefs.gpu_preferred_device = "___invalid___"
         except TypeError as e:
             Globals.gpu_devices = [
                 d for d in re.findall(r"'([^']+)'", str(e)) if d != "AUTO"
@@ -232,7 +246,25 @@ def detect_gpus():
         print(f"PseudoRenderingFarm: GPU detection failed: {e}")
 
 
+def retry_detect_gpus():
+    detect_gpus()
+    return None if Globals.gpu_detected else 0.5
+
+
+def fail_gpu_setup(message):
+    print(f"PseudoRenderingFarm: multi-GPU setup failed: {message}")
+    Globals.gpu_setup_error = message
+    Globals.userpref_process = None
+    Globals.dummy_scene_process = None
+    Globals.gpu_discovery_processes = []
+    Globals.gpu_devices_envs = [os.environ.copy()]
+    cleanup_gpu_config()
+
+
 def setup_multi_gpu():
+    if Globals.gpu_setup_error:
+        return
+
     if not Globals.userpref_path:
         if Globals.userpref_process is None:
             expr = "import bpy, os; print('USERPREF:' + os.path.join(bpy.utils.resource_path('USER'), 'config', 'userpref.blend'))"
@@ -240,18 +272,27 @@ def setup_multi_gpu():
             Globals.userpref_process = subprocess.Popen(
                 [bpy.app.binary_path, "-b", "--python-expr", expr],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
             )
             return
-        status = Globals.userpref_process.poll()
-        if status is not None:
-            stdout, stderr = Globals.userpref_process.communicate()
+        if Globals.userpref_process.poll() is None:
+            return
+        stdout, _ = Globals.userpref_process.communicate()
+        Globals.userpref_process = None
 
-            for line in (stdout + stderr).splitlines():
-                if line.startswith("USERPREF:"):
-                    Globals.userpref_path = line[len("USERPREF:") :]
-                    return
+        for line in stdout.splitlines():
+            if line.startswith("USERPREF:"):
+                Globals.userpref_path = line[len("USERPREF:") :].strip()
+                break
+
+        if not Globals.userpref_path:
+            fail_gpu_setup("Could not query the user preferences location")
+        elif not os.path.isfile(Globals.userpref_path):
+            missing_path = Globals.userpref_path
+            Globals.userpref_path = ""
+            fail_gpu_setup(f"No saved user preferences found at {missing_path}")
+        return
 
     if not Globals.gpu_config_dir:
         Globals.gpu_config_dir = tempfile.mkdtemp(prefix="gpu_config_")
@@ -259,54 +300,64 @@ def setup_multi_gpu():
 
     if not os.path.isfile(scene_path):
         if Globals.dummy_scene_process is None:
-            expr = f"import bpy; bpy.ops.wm.read_homefile(); bpy.ops.wm.save_as_mainfile(filepath=r'{scene_path}')"
+            expr = f"import bpy; bpy.ops.wm.read_homefile(); bpy.ops.wm.save_as_mainfile(filepath={scene_path!r})"
 
             Globals.dummy_scene_process = subprocess.Popen(
                 [bpy.app.binary_path, "-b", "--python-expr", expr],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return
-        status = Globals.dummy_scene_process.poll()
-        if status is None:
+        if Globals.dummy_scene_process.poll() is None:
+            return
+        Globals.dummy_scene_process = None
+        if not os.path.isfile(scene_path):
+            fail_gpu_setup("Failed to create the temporary configuration scene")
             return
 
     if not Globals.gpu_discovery_processes:
-        Globals.gpu_devices_envs = []
+        processes = []
+        envs = []
         for i, gpu_name in enumerate(Globals.gpu_devices):
             gpu_dir = os.path.join(Globals.gpu_config_dir, f"gpu_{i}")
             os.makedirs(gpu_dir, exist_ok=True)
-            shutil.copy2(Globals.userpref_path, os.path.join(gpu_dir, "userpref.blend"))
+            try:
+                shutil.copy2(
+                    Globals.userpref_path, os.path.join(gpu_dir, "userpref.blend")
+                )
+            except OSError as e:
+                fail_gpu_setup(f"Failed to copy user preferences: {e}")
+                return
 
             env = os.environ.copy()
             env["BLENDER_USER_CONFIG"] = gpu_dir
 
-            cmd = [
-                bpy.app.binary_path,
-                scene_path,
-                "--python-expr",
-                f"import bpy; bpy.context.preferences.system.gpu_preferred_device = '{gpu_name}'; bpy.ops.wm.save_userpref(); bpy.ops.wm.quit_blender()",
-            ]
-            Globals.gpu_discovery_processes.append(
+            expr = (
+                f"import bpy; bpy.context.preferences.system.gpu_preferred_device = {gpu_name!r}; "
+                "bpy.ops.wm.save_userpref(); bpy.ops.wm.quit_blender()"
+            )
+            cmd = [bpy.app.binary_path, scene_path, "--python-expr", expr]
+            processes.append(
                 subprocess.Popen(
                     cmd,
                     env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
             )
+            envs.append(env)
 
-            Globals.gpu_devices_envs.append(env)
-
-        if not Globals.gpu_devices_envs:
-            Globals.gpu_devices_envs = [os.environ.copy()]
-            return
+        Globals.gpu_discovery_processes = processes
+        Globals.gpu_devices_envs = envs
+        return
 
     if all(p.poll() is not None for p in Globals.gpu_discovery_processes):
+        failed = [p for p in Globals.gpu_discovery_processes if p.returncode != 0]
+        Globals.gpu_discovery_processes = []
+        if failed:
+            fail_gpu_setup(f"{len(failed)} GPU configuration process(es) failed")
+            return
         Globals.gpu_configured = True
-    return
 
 
 def cleanup_gpu_config():
@@ -322,21 +373,6 @@ def get_env_for_instance(index):
     if not Globals.gpu_devices_envs:
         Globals.gpu_devices_envs = [os.environ.copy()]
     return Globals.gpu_devices_envs[index % len(Globals.gpu_devices_envs)]
-
-
-def get_worker_subrange(start_idx, end_idx, num_workers, worker_id):
-    total_elements = end_idx - start_idx + 1
-
-    if total_elements <= 0 or worker_id >= num_workers:
-        return None
-
-    chunk_size = math.ceil(total_elements / num_workers)
-    sub_start = start_idx + (worker_id * chunk_size)
-    sub_end = sub_start + chunk_size - 1
-    if sub_start > end_idx:
-        return None
-    sub_end = min(sub_end, end_idx)
-    return (sub_start, sub_end)
 
 
 def get_worker_subrange(start_idx, end_idx, num_workers, worker_id):
@@ -449,14 +485,14 @@ class RENDER_OT_cancel_pseudo_rendering_farm(bpy.types.Operator):
     bl_label = "Cancel All Renders"
 
     def execute(self, context):
-        if not Globals.active_render_processes:
+        if not Globals.active_render_processes and not Globals.is_benchmarking:
             self.report({"INFO"}, "No active processes found")
             return {"FINISHED"}
 
         count = len([p for p in Globals.active_render_processes if p.poll() is None])
-        if Globals.is_benchmarking:
-            Globals.early_exit_benchmark = True
         Globals.is_benchmarking = False
+        Globals.is_rendering_active = False
+        Globals.bench_status_msg = ""
 
         terminate_all_processes()
         time.sleep(0.2)
@@ -487,6 +523,7 @@ def launch_benchmark_iteration(context):
     frame_end = scene.frame_end
     available = frame_end - frame_start + 1
     Globals.benchmark_frames = min(48, available)
+    bench_end = frame_start + Globals.benchmark_frames - 1
 
     Globals.bench_status_msg = f"Testing {Globals.current_bench_instances} instances on {Globals.benchmark_frames} frames"
 
@@ -495,22 +532,30 @@ def launch_benchmark_iteration(context):
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     for i in range(Globals.current_bench_instances):
-        cmd = [blender_exe, "-b", blend_path, "-o", out_path, "-a"]
         if is_system_balanced():
             subrange = get_worker_subrange(
-                scene.frame_start,
-                frame_start + Globals.benchmark_frames - 1,
+                frame_start,
+                bench_end,
                 Globals.current_bench_instances,
                 i,
             )
             if not subrange:
                 continue
-            subrange_start, subrange_end = subrange
-            cmd = (
-                cmd[:-1]
-                + ["-s", str(subrange_start), "-e", str(subrange_end)]
-                + cmd[-1:]
-            )
+        else:
+            subrange = (frame_start, bench_end)
+        subrange_start, subrange_end = subrange
+        cmd = [
+            blender_exe,
+            "-b",
+            blend_path,
+            "-o",
+            out_path,
+            "-s",
+            str(subrange_start),
+            "-e",
+            str(subrange_end),
+            "-a",
+        ]
 
         Globals.active_render_processes.append(
             subprocess.Popen(cmd, env=get_env_for_instance(i))
@@ -558,6 +603,7 @@ class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
 
     def execute(self, context):
         Globals.gpu_detection_active = True
+        Globals.gpu_setup_error = ""
 
         if not bpy.app.timers.is_registered(check_multi_gpu_status):
             bpy.app.timers.register(check_multi_gpu_status)
@@ -654,6 +700,8 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
                     text=f"Multi-GPU: {len(Globals.gpu_devices)} devices",
                     icon="PREFERENCES",
                 )
+            elif Globals.gpu_setup_error:
+                layout.label(text=Globals.gpu_setup_error, icon="ERROR")
 
         if Globals.is_benchmarking:
             layout.label(text=Globals.bench_status_msg, icon="PLAY")
@@ -689,6 +737,8 @@ def register():
         name="Instances", default=2, min=1, max=32
     )
     detect_gpus()
+    if not Globals.gpu_detected and not bpy.app.background:
+        bpy.app.timers.register(retry_detect_gpus, first_interval=0.5)
 
 
 def unregister():
