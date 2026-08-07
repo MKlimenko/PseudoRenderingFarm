@@ -42,6 +42,14 @@ class Globals:
 
 
 VALIDATED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".exr"}
+MAX_INSTANCES = 32
+BENCHMARK_MAX_FRAMES = 48
+
+
+def redraw_all_windows():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            area.tag_redraw()
 
 
 def is_image_valid(filepath):
@@ -103,8 +111,8 @@ def cleanup_bench_dir():
     if Globals.bench_temp_dir and os.path.exists(Globals.bench_temp_dir):
         try:
             shutil.rmtree(Globals.bench_temp_dir)
-        except Exception:
-            pass
+        except OSError as e:
+            print(f"PseudoRenderingFarm: Failed to remove benchmark dir: {e}")
         Globals.bench_temp_dir = ""
 
 
@@ -138,7 +146,7 @@ def check_render_status():
             Globals.declining_streak += 1
 
         if (
-            Globals.current_bench_instances >= 16
+            Globals.current_bench_instances >= MAX_INSTANCES
             or Globals.declining_streak >= 2 * max(len(Globals.gpu_devices), 1)
         ):
             best_count = max(
@@ -163,24 +171,19 @@ def check_render_status():
                 bpy.context.window_manager.popup_menu(
                     draw_popup, title="Benchmark Complete", icon="RENDER_RESULT"
                 )
-
-                for window in bpy.context.window_manager.windows:
-                    for area in window.screen.areas:
-                        area.tag_redraw()
+                redraw_all_windows()
 
             return None
         else:
             Globals.current_bench_instances += 1
-            for window in bpy.context.window_manager.windows:
-                for area in window.screen.areas:
-                    area.tag_redraw()
-            launch_benchmark_iteration(bpy.context)
+            redraw_all_windows()
+            launch_benchmark_iteration()
 
     if Globals.is_rendering_active and not Globals.active_render_processes:
 
         Globals.elapsed_time = time.time() - Globals.start_time
         scene = bpy.context.scene
-        frames = scene.frame_end - scene.frame_start + 1
+        frames = (scene.frame_end - scene.frame_start) // scene.frame_step + 1
         Globals.seconds_per_frame = Globals.elapsed_time / frames
         Globals.is_rendering_active = False
 
@@ -196,9 +199,7 @@ def check_render_status():
                 title="Pseudo Rendering Farm Complete",
                 icon="RENDER_ANIMATION",
             )
-            for window in bpy.context.window_manager.windows:
-                for area in window.screen.areas:
-                    area.tag_redraw()
+            redraw_all_windows()
 
         return None
 
@@ -212,9 +213,7 @@ def check_multi_gpu_status():
     setup_multi_gpu()
     if Globals.gpu_configured or Globals.gpu_setup_error:
         Globals.gpu_detection_active = False
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                area.tag_redraw()
+        redraw_all_windows()
         return None
 
     return 1.0
@@ -364,8 +363,8 @@ def cleanup_gpu_config():
     if Globals.gpu_config_dir and os.path.exists(Globals.gpu_config_dir):
         try:
             shutil.rmtree(Globals.gpu_config_dir)
-        except Exception:
-            pass
+        except OSError as e:
+            print(f"PseudoRenderingFarm: Failed to remove GPU config dir: {e}")
         Globals.gpu_config_dir = ""
 
 
@@ -375,19 +374,17 @@ def get_env_for_instance(index):
     return Globals.gpu_devices_envs[index % len(Globals.gpu_devices_envs)]
 
 
-def get_worker_subrange(start_idx, end_idx, num_workers, worker_id):
-    total_elements = end_idx - start_idx + 1
-
-    if total_elements <= 0 or worker_id >= num_workers:
+def get_worker_subrange(start_idx, end_idx, num_workers, worker_id, step=1):
+    if end_idx < start_idx or worker_id >= num_workers:
         return None
+    total_frames = (end_idx - start_idx) // step + 1
 
-    chunk_size = math.ceil(total_elements / num_workers)
-    sub_start = start_idx + (worker_id * chunk_size)
-    sub_end = sub_start + chunk_size - 1
-    if sub_start > end_idx:
+    chunk_size = math.ceil(total_frames / num_workers)
+    first_frame = worker_id * chunk_size
+    if first_frame >= total_frames:
         return None
-    sub_end = min(sub_end, end_idx)
-    return (sub_start, sub_end)
+    last_frame = min(first_frame + chunk_size - 1, total_frames - 1)
+    return (start_idx + first_frame * step, start_idx + last_frame * step)
 
 
 def using_same_gpus():
@@ -453,12 +450,17 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
         if not bpy.app.timers.is_registered(check_render_status):
             bpy.app.timers.register(check_render_status)
 
+        launched = 0
         for i in range(num_instances):
             cmd = [blender_exe, "-b", blend_path, "-a"]
             try:
                 if is_system_balanced():
                     subrange = get_worker_subrange(
-                        scene.frame_start, scene.frame_end, num_instances, i
+                        scene.frame_start,
+                        scene.frame_end,
+                        num_instances,
+                        i,
+                        scene.frame_step,
                     )
                     if not subrange:
                         continue
@@ -471,10 +473,16 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
                 Globals.active_render_processes.append(
                     subprocess.Popen(cmd, env=get_env_for_instance(i))
                 )
+                launched += 1
             except Exception as e:
                 self.report({"ERROR"}, f"Failed to launch instance {i}: {e}")
 
-        self.report({"INFO"}, f"Launched {num_instances} render instances.")
+        if launched == 0:
+            Globals.is_rendering_active = False
+            self.report({"ERROR"}, "No render instances could be launched")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Launched {launched} render instances.")
         return {"FINISHED"}
 
 
@@ -513,7 +521,7 @@ class RENDER_OT_cancel_pseudo_rendering_farm(bpy.types.Operator):
 # --- Benchmarking ---
 
 
-def launch_benchmark_iteration(context):
+def launch_benchmark_iteration():
     """Spawns processes for the current benchmark step."""
     Globals.start_time = time.time()
     blender_exe = bpy.app.binary_path
@@ -521,9 +529,10 @@ def launch_benchmark_iteration(context):
     scene = bpy.context.scene
     frame_start = scene.frame_start
     frame_end = scene.frame_end
-    available = frame_end - frame_start + 1
-    Globals.benchmark_frames = min(48, available)
-    bench_end = frame_start + Globals.benchmark_frames - 1
+    step = scene.frame_step
+    available = (frame_end - frame_start) // step + 1
+    Globals.benchmark_frames = min(BENCHMARK_MAX_FRAMES, available)
+    bench_end = frame_start + (Globals.benchmark_frames - 1) * step
 
     Globals.bench_status_msg = f"Testing {Globals.current_bench_instances} instances on {Globals.benchmark_frames} frames"
 
@@ -538,6 +547,7 @@ def launch_benchmark_iteration(context):
                 bench_end,
                 Globals.current_bench_instances,
                 i,
+                step,
             )
             if not subrange:
                 continue
@@ -566,7 +576,7 @@ def launch_benchmark_iteration(context):
 
 
 class RENDER_OT_benchmarking(bpy.types.Operator):
-    """Launch pseudo rendering farm benchmarking"""
+    """Save the file and benchmark how many parallel instances render fastest"""
 
     bl_idname = "render.benchmarking"
     bl_label = "Launch benchmark"
@@ -588,7 +598,7 @@ class RENDER_OT_benchmarking(bpy.types.Operator):
         Globals.peak_throughput = 0
         Globals.bench_temp_dir = tempfile.mkdtemp(prefix="blender_bench_")
 
-        launch_benchmark_iteration(context)
+        launch_benchmark_iteration()
         return {"FINISHED"}
 
 
@@ -622,7 +632,7 @@ class RENDER_OT_open_folder(bpy.types.Operator):
     bl_idname = "render.open_folder"
     bl_label = "Open folder"
 
-    def sanitize(self, context):
+    def get_render_folder(self, context):
         frame_path = Path(
             context.scene.render.frame_path(frame=context.scene.frame_current)
         )
@@ -630,7 +640,7 @@ class RENDER_OT_open_folder(bpy.types.Operator):
         return folder_path
 
     def execute(self, context):
-        render_path = self.sanitize(context)
+        render_path = self.get_render_folder(context)
 
         if not os.path.exists(render_path):
             return {"CANCELLED"}
@@ -639,9 +649,9 @@ class RENDER_OT_open_folder(bpy.types.Operator):
         if current_os == "Windows":
             os.startfile(render_path)
         elif current_os == "Darwin":
-            subprocess.run(["open", render_path])
+            subprocess.run(["open", render_path], check=False)
         else:
-            subprocess.run(["xdg-open", render_path])
+            subprocess.run(["xdg-open", render_path], check=False)
 
         return {"FINISHED"}
 
@@ -681,11 +691,10 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
             "render.open_folder", icon="FILE_FOLDER", text="Open render folder"
         )
 
-        if len(Globals.gpu_devices) > 1:
-            if not Globals.gpu_configured:
-                gpu_row = col.row(align=True)
-                gpu_row.enabled = not is_running and not Globals.gpu_detection_active
-                gpu_row.operator("render.setup_multi_gpu", icon="LIGHT")
+        if len(Globals.gpu_devices) > 1 and not Globals.gpu_configured:
+            gpu_row = col.row(align=True)
+            gpu_row.enabled = not is_running and not Globals.gpu_detection_active
+            gpu_row.operator("render.setup_multi_gpu", icon="LIGHT")
 
         row = col.row(align=True)
         cancel_row = row.row(align=True)
@@ -734,7 +743,7 @@ def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.pseudo_rendering_farm_instances = bpy.props.IntProperty(
-        name="Instances", default=2, min=1, max=32
+        name="Instances", default=2, min=1, max=MAX_INSTANCES
     )
     detect_gpus()
     if not Globals.gpu_detected and not bpy.app.background:
@@ -742,6 +751,13 @@ def register():
 
 
 def unregister():
+    Globals.is_rendering_active = False
+    Globals.is_benchmarking = False
+    terminate_all_processes()
+    for timer in (check_render_status, check_multi_gpu_status, retry_detect_gpus):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
+    cleanup_bench_dir()
     cleanup_gpu_config()
     for c in classes:
         bpy.utils.unregister_class(c)

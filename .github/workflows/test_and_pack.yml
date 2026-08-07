@@ -19,10 +19,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Install Black
-        run: pip install black
+      - name: Install dependencies
+        run: pip install black pytest psutil
       - name: Run Black Check
         run: black --check .
+      - name: Run Unit Tests
+        working-directory: ./tests
+        run: pytest -s test_unit.py -x
       - name: Set up Homebrew
         id: set-up-homebrew
         uses: Homebrew/actions/setup-homebrew@main
@@ -30,9 +33,7 @@ jobs:
         run: brew install blender
       - name: Build Blender Extension
         run: blender --command extension build
-      - name: Install dependencies
-        run: pip install pytest psutil
-      - name: Run Pytest
+      - name: Run Integration Tests
         working-directory: ./tests
         run: pytest -s test.py -x
       - name: Upload Artifact
