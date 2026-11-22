@@ -147,7 +147,7 @@ def check_render_status():
 
         if (
             Globals.current_bench_instances >= MAX_INSTANCES
-            or Globals.declining_streak >= 2 * max(len(Globals.gpu_devices), 1)
+            or Globals.declining_streak >= max(len(Globals.gpu_devices), 1)
         ):
             best_count = max(
                 Globals.benchmark_results, key=Globals.benchmark_results.get
