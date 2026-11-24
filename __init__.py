@@ -10,8 +10,26 @@ import tempfile
 import time
 
 
+class Instance:
+    """A spawned Blender process together with its log file."""
+
+    def __init__(self, process, log_path):
+        self.process = process
+        self.log_path = log_path
+        self.log_offset = 0
+        self.frames_done = 0
+
+
 class Globals:
     active_render_processes = []
+    instances = []
+    log_dir = ""
+    output_dir = ""
+    expected_frames = {}
+    frame_step = 1
+    total_frames = 0
+    frames_done = 0
+    error_msg = ""
     is_rendering_active = False
     is_benchmarking = False
     bench_status_msg = ""
@@ -42,6 +60,8 @@ class Globals:
 
 
 VALIDATED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".exr"}
+SAVED_MARKER = b"saved: '"
+SKIPPED_MARKER = b"skipping existing frame"
 MAX_INSTANCES = 32
 BENCHMARK_MAX_FRAMES = 48
 
@@ -78,9 +98,7 @@ def is_image_valid(filepath):
 
 
 def cleanup_corrupted_frames():
-    scene = bpy.context.scene
-    output_path = bpy.path.abspath(scene.render.filepath)
-    output_dir = os.path.dirname(output_path)
+    output_dir = Globals.output_dir
 
     if not os.path.isdir(output_dir):
         return 0
@@ -116,6 +134,121 @@ def cleanup_bench_dir():
         Globals.bench_temp_dir = ""
 
 
+def cleanup_log_dir():
+    if Globals.log_dir and os.path.exists(Globals.log_dir):
+        try:
+            shutil.rmtree(Globals.log_dir)
+        except OSError as e:
+            print(f"PseudoRenderingFarm: Failed to remove log dir: {e}")
+    Globals.log_dir = ""
+
+
+def reset_log_dir():
+    cleanup_log_dir()
+    Globals.log_dir = tempfile.mkdtemp(prefix="prf_logs_")
+
+
+def start_run(total_frames):
+    Globals.active_render_processes.clear()
+    Globals.instances.clear()
+    Globals.total_frames = total_frames
+    Globals.frames_done = 0
+    Globals.start_time = time.time()
+
+
+def spawn_instance(cmd, index, log_name):
+    log_path = os.path.join(Globals.log_dir, log_name)
+    with open(log_path, "wb") as log_file:
+        process = subprocess.Popen(
+            cmd,
+            env=get_env_for_instance(index),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+    Globals.active_render_processes.append(process)
+    Globals.instances.append(Instance(process, log_path))
+
+
+def update_progress():
+    """Counts the frames the instances reported in their logs.
+    Returns True if the total has changed."""
+    markers = [SAVED_MARKER]
+    if is_system_balanced():
+        markers.append(SKIPPED_MARKER)
+
+    for instance in Globals.instances:
+        try:
+            with open(instance.log_path, "rb") as f:
+                f.seek(instance.log_offset)
+                data = f.read()
+        except OSError:
+            continue
+        complete = data[: data.rfind(b"\n") + 1].lower()
+        instance.log_offset += len(complete)
+        instance.frames_done += sum(complete.count(m) for m in markers)
+
+    done = sum(instance.frames_done for instance in Globals.instances)
+    done = min(done, Globals.total_frames)
+    changed = done != Globals.frames_done
+    Globals.frames_done = done
+    return changed
+
+
+def count_failed_instances():
+    return sum(1 for i in Globals.instances if i.process.poll() not in (None, 0))
+
+
+def find_missing_frames():
+    missing = []
+    for frame, path in Globals.expected_frames.items():
+        try:
+            if os.path.getsize(path) == 0:
+                missing.append(frame)
+        except OSError:
+            missing.append(frame)
+    return missing
+
+
+def format_frame_ranges(frames, step=1, max_ranges=4):
+    """Formats sorted frame numbers compactly, e.g. '3-7, 12, 20-24'."""
+    ranges = []
+    for frame in frames:
+        if ranges and frame == ranges[-1][1] + step:
+            ranges[-1][1] = frame
+        else:
+            ranges.append([frame, frame])
+
+    parts = [str(a) if a == b else f"{a}-{b}" for a, b in ranges[:max_ranges]]
+    if len(ranges) > max_ranges:
+        parts.append("...")
+    return ", ".join(parts)
+
+
+def get_failure_summary():
+    """Describes what went wrong with the finished render, empty if nothing."""
+    problems = []
+    failed = count_failed_instances()
+    if failed:
+        problems.append(f"{failed} of {len(Globals.instances)} instances failed")
+
+    missing = find_missing_frames()
+    if missing:
+        ranges = format_frame_ranges(missing, Globals.frame_step)
+        problems.append(f"{len(missing)} frames missing ({ranges})")
+    return ", ".join(problems)
+
+
+def show_popup(title, text, icon, title_icon):
+    if bpy.app.background:
+        return
+
+    def draw_popup(self, context):
+        self.layout.label(text=text, icon=icon)
+
+    bpy.context.window_manager.popup_menu(draw_popup, title=title, icon=title_icon)
+    redraw_all_windows()
+
+
 def terminate_all_processes():
     for proc in Globals.active_render_processes:
         if proc.poll() is None:
@@ -128,14 +261,49 @@ def terminate_all_processes():
     Globals.active_render_processes.clear()
 
 
+def finish_benchmark(failed):
+    Globals.is_benchmarking = False
+    Globals.bench_status_msg = ""
+    cleanup_bench_dir()
+
+    print("PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
+    print(Globals.benchmark_results)
+
+    best_count = max(Globals.benchmark_results, key=Globals.benchmark_results.get)
+    best_throughput = Globals.benchmark_results[best_count]
+    if best_throughput <= 0:
+        Globals.error_msg = "Benchmark failed: the instances could not render"
+        show_popup("Benchmark Failed", Globals.error_msg, "ERROR", "ERROR")
+        return
+
+    bpy.context.scene.pseudo_rendering_farm_instances = best_count
+    Globals.bench_status_msg = f"Optimal found: {best_count}"
+    if failed:
+        Globals.error_msg = (
+            f"Benchmark stopped: rendering failed with "
+            f"{Globals.current_bench_instances} instances"
+        )
+
+    show_popup(
+        "Benchmark Complete",
+        f"Benchmark is complete, optimal number of instances is {best_count} with {1.0 / best_throughput:.1f} seconds per frame",
+        "CHECKMARK",
+        "RENDER_RESULT",
+    )
+
+
 def check_render_status():
     for proc in Globals.active_render_processes[:]:
         if proc.poll() is not None:
             Globals.active_render_processes.remove(proc)
 
+    if update_progress():
+        redraw_all_windows()
+
     if Globals.is_benchmarking and not Globals.active_render_processes:
+        failed = count_failed_instances() > 0
         elapsed = time.time() - Globals.start_time
-        throughput = Globals.benchmark_frames / max(elapsed, 0.001)
+        throughput = 0 if failed else Globals.benchmark_frames / max(elapsed, 0.001)
 
         Globals.benchmark_results[Globals.current_bench_instances] = throughput
 
@@ -146,33 +314,12 @@ def check_render_status():
             Globals.declining_streak += 1
 
         if (
-            Globals.current_bench_instances >= MAX_INSTANCES
+            failed
+            or Globals.current_bench_instances >= MAX_INSTANCES
             or Globals.declining_streak >= max(len(Globals.gpu_devices), 1)
         ):
-            best_count = max(
-                Globals.benchmark_results, key=Globals.benchmark_results.get
-            )
-            bpy.context.scene.pseudo_rendering_farm_instances = best_count
-
-            Globals.is_benchmarking = False
-            Globals.bench_status_msg = f"Optimal found: {best_count}"
-            cleanup_bench_dir()
-
-            def draw_popup(self, context):
-                self.layout.label(
-                    text=f"Benchmark is complete, optimal number of instances is {best_count} with {1.0 / Globals.benchmark_results[best_count]:.1f} seconds per frame",
-                    icon="CHECKMARK",
-                )
-
-            print("PseudoRenderingFarm: !!! Benchmarking stats for nerds !!!")
-            print(Globals.benchmark_results)
-
-            if not bpy.app.background:
-                bpy.context.window_manager.popup_menu(
-                    draw_popup, title="Benchmark Complete", icon="RENDER_RESULT"
-                )
-                redraw_all_windows()
-
+            finish_benchmark(failed)
+            redraw_all_windows()
             return None
         else:
             Globals.current_bench_instances += 1
@@ -180,26 +327,25 @@ def check_render_status():
             launch_benchmark_iteration()
 
     if Globals.is_rendering_active and not Globals.active_render_processes:
-
         Globals.elapsed_time = time.time() - Globals.start_time
-        scene = bpy.context.scene
-        frames = (scene.frame_end - scene.frame_start) // scene.frame_step + 1
-        Globals.seconds_per_frame = Globals.elapsed_time / frames
+        Globals.seconds_per_frame = Globals.elapsed_time / max(Globals.total_frames, 1)
         Globals.is_rendering_active = False
+        if count_failed_instances():
+            cleanup_corrupted_frames()
+        Globals.error_msg = get_failure_summary()
 
-        def draw_popup(self, context):
-            self.layout.label(
-                text=f"All instances finished in {Globals.elapsed_time:.1f} s at {Globals.seconds_per_frame:.1f} seconds per frame",
-                icon="CHECKMARK",
+        if Globals.error_msg:
+            show_popup(
+                "Pseudo Rendering Farm Failed", Globals.error_msg, "ERROR", "ERROR"
             )
-
-        if not bpy.app.background:
-            bpy.context.window_manager.popup_menu(
-                draw_popup,
-                title="Pseudo Rendering Farm Complete",
-                icon="RENDER_ANIMATION",
+        else:
+            show_popup(
+                "Pseudo Rendering Farm Complete",
+                f"All instances finished in {Globals.elapsed_time:.1f} s at {Globals.seconds_per_frame:.1f} seconds per frame",
+                "CHECKMARK",
+                "RENDER_ANIMATION",
             )
-            redraw_all_windows()
+        redraw_all_windows()
 
         return None
 
@@ -207,6 +353,15 @@ def check_render_status():
         return None
 
     return 1.0
+
+
+@bpy.app.handlers.persistent
+def on_file_loaded(_):
+    if Globals.is_benchmarking:
+        Globals.is_benchmarking = False
+        Globals.bench_status_msg = ""
+        terminate_all_processes()
+        cleanup_bench_dir()
 
 
 def check_multi_gpu_status():
@@ -401,6 +556,13 @@ def is_system_balanced():
 
 
 def is_scene_configured(extension_obj, scene_render):
+    if scene_render.is_movie_format:
+        extension_obj.report(
+            {"ERROR"},
+            "Video output is not supported, the instances cannot write to the same file. Render an image sequence (e.g. PNG) instead",
+        )
+        return False
+
     if is_system_balanced():
         return True
 
@@ -443,12 +605,21 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
         blend_path = bpy.data.filepath
         num_instances = scene.pseudo_rendering_farm_instances
 
-        Globals.active_render_processes.clear()
-        Globals.start_time = time.time()
+        frames = range(scene.frame_start, scene.frame_end + 1, scene.frame_step)
+        render = scene.render
+        Globals.output_dir = os.path.dirname(render.frame_path(frame=frames[0]))
+        Globals.frame_step = scene.frame_step
+        Globals.expected_frames = {}
+        if not render.use_multiview:
+            Globals.expected_frames = {f: render.frame_path(frame=f) for f in frames}
+
+        Globals.error_msg = ""
+        reset_log_dir()
+        start_run(len(frames))
         Globals.is_rendering_active = True
 
         if not bpy.app.timers.is_registered(check_render_status):
-            bpy.app.timers.register(check_render_status)
+            bpy.app.timers.register(check_render_status, persistent=True)
 
         launched = 0
         for i in range(num_instances):
@@ -470,9 +641,7 @@ class RENDER_OT_pseudo_rendering_farm(bpy.types.Operator):
                         + ["-s", str(subrange_start), "-e", str(subrange_end)]
                         + cmd[-1:]
                     )
-                Globals.active_render_processes.append(
-                    subprocess.Popen(cmd, env=get_env_for_instance(i))
-                )
+                spawn_instance(cmd, i, f"instance_{i}.log")
                 launched += 1
             except Exception as e:
                 self.report({"ERROR"}, f"Failed to launch instance {i}: {e}")
@@ -523,7 +692,6 @@ class RENDER_OT_cancel_pseudo_rendering_farm(bpy.types.Operator):
 
 def launch_benchmark_iteration():
     """Spawns processes for the current benchmark step."""
-    Globals.start_time = time.time()
     blender_exe = bpy.app.binary_path
     blend_path = bpy.data.filepath
     scene = bpy.context.scene
@@ -532,6 +700,7 @@ def launch_benchmark_iteration():
     step = scene.frame_step
     available = (frame_end - frame_start) // step + 1
     Globals.benchmark_frames = min(BENCHMARK_MAX_FRAMES, available)
+    start_run(Globals.benchmark_frames)
     bench_end = frame_start + (Globals.benchmark_frames - 1) * step
 
     Globals.bench_status_msg = f"Testing {Globals.current_bench_instances} instances on {Globals.benchmark_frames} frames"
@@ -567,12 +736,11 @@ def launch_benchmark_iteration():
             "-a",
         ]
 
-        Globals.active_render_processes.append(
-            subprocess.Popen(cmd, env=get_env_for_instance(i))
-        )
+        log_name = f"bench_{Globals.current_bench_instances}_instance_{i}.log"
+        spawn_instance(cmd, i, log_name)
 
     if not bpy.app.timers.is_registered(check_render_status):
-        bpy.app.timers.register(check_render_status)
+        bpy.app.timers.register(check_render_status, persistent=True)
 
 
 class RENDER_OT_benchmarking(bpy.types.Operator):
@@ -597,6 +765,9 @@ class RENDER_OT_benchmarking(bpy.types.Operator):
         Globals.declining_streak = 0
         Globals.peak_throughput = 0
         Globals.bench_temp_dir = tempfile.mkdtemp(prefix="blender_bench_")
+        Globals.output_dir = ""
+        Globals.error_msg = ""
+        reset_log_dir()
 
         launch_benchmark_iteration()
         return {"FINISHED"}
@@ -626,6 +797,20 @@ class RENDER_OT_setup_multi_gpu(bpy.types.Operator):
 # --- UI ---
 
 
+def open_in_file_browser(path):
+    if not path or not os.path.exists(path):
+        return False
+
+    current_os = platform.system()
+    if current_os == "Windows":
+        os.startfile(path)
+    elif current_os == "Darwin":
+        subprocess.run(["open", path], check=False)
+    else:
+        subprocess.run(["xdg-open", path], check=False)
+    return True
+
+
 class RENDER_OT_open_folder(bpy.types.Operator):
     """Open the folder with rendered data"""
 
@@ -640,19 +825,20 @@ class RENDER_OT_open_folder(bpy.types.Operator):
         return folder_path
 
     def execute(self, context):
-        render_path = self.get_render_folder(context)
-
-        if not os.path.exists(render_path):
+        if not open_in_file_browser(self.get_render_folder(context)):
             return {"CANCELLED"}
+        return {"FINISHED"}
 
-        current_os = platform.system()
-        if current_os == "Windows":
-            os.startfile(render_path)
-        elif current_os == "Darwin":
-            subprocess.run(["open", render_path], check=False)
-        else:
-            subprocess.run(["xdg-open", render_path], check=False)
 
+class RENDER_OT_open_farm_logs(bpy.types.Operator):
+    """Open the folder with the logs of the render instances"""
+
+    bl_idname = "render.open_farm_logs"
+    bl_label = "Open logs"
+
+    def execute(self, context):
+        if not open_in_file_browser(Globals.log_dir):
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -712,13 +898,18 @@ class RENDER_PT_pseudo_rendering_farm_panel(bpy.types.Panel):
             elif Globals.gpu_setup_error:
                 layout.label(text=Globals.gpu_setup_error, icon="ERROR")
 
+        progress = Globals.frames_done / max(Globals.total_frames, 1)
         if Globals.is_benchmarking:
-            layout.label(text=Globals.bench_status_msg, icon="PLAY")
+            layout.progress(factor=progress, text=Globals.bench_status_msg)
         elif Globals.is_rendering_active:
-            layout.label(
-                text=f"Rendering: {len(Globals.active_render_processes)} active",
-                icon="URL",
-            )
+            text = f"{Globals.frames_done} / {Globals.total_frames} frames, {len(Globals.active_render_processes)} active"
+            failed = count_failed_instances()
+            if failed:
+                text += f", {failed} failed"
+            layout.progress(factor=progress, text=text)
+        elif Globals.error_msg:
+            layout.label(text=Globals.error_msg, icon="ERROR")
+            layout.operator("render.open_farm_logs", icon="TEXT")
         else:
             if Globals.elapsed_time != 0:
                 layout.label(
@@ -735,6 +926,7 @@ classes = [
     RENDER_OT_benchmarking,
     RENDER_OT_setup_multi_gpu,
     RENDER_OT_open_folder,
+    RENDER_OT_open_farm_logs,
     RENDER_PT_pseudo_rendering_farm_panel,
 ]
 
@@ -745,6 +937,7 @@ def register():
     bpy.types.Scene.pseudo_rendering_farm_instances = bpy.props.IntProperty(
         name="Instances", default=2, min=1, max=MAX_INSTANCES
     )
+    bpy.app.handlers.load_post.append(on_file_loaded)
     detect_gpus()
     if not Globals.gpu_detected and not bpy.app.background:
         bpy.app.timers.register(retry_detect_gpus, first_interval=0.5)
@@ -757,7 +950,10 @@ def unregister():
     for timer in (check_render_status, check_multi_gpu_status, retry_detect_gpus):
         if bpy.app.timers.is_registered(timer):
             bpy.app.timers.unregister(timer)
+    if on_file_loaded in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(on_file_loaded)
     cleanup_bench_dir()
+    cleanup_log_dir()
     cleanup_gpu_config()
     for c in classes:
         bpy.utils.unregister_class(c)

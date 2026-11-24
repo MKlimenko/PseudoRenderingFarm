@@ -29,6 +29,10 @@ If you're using the Vulkan backend, you can try an experimental multi-GPU setup.
 
 ![ui_multi_gpu](doc/ui_multi_gpu.png)
 
+While rendering, the panel shows how many frames are done. If an instance exits with an error (most often by running out of VRAM) or some frames are missing afterwards, the panel reports the number of failed instances and the missing frame ranges instead of the usual summary, and `Open logs` opens the folder with the output of every instance. Partial frames left by a failed instance are removed, so you can uncheck `Overwrite` and launch again to render only what is missing.
+
+Video output formats are not supported, because the instances cannot write into the same file. Render an image sequence and encode it afterwards.
+
 In case of unbalanced system (different GPUs), one device might be significantly faster than another, imagine integrated graphics paired with a powerful discrete GPU. In that case, the original approach with `Overwrite` checked and `Placeholders` unchecked is still required, so that the devices can work at their own pace. For regular renders this requirement is lifted as of version 1.1.1.
 
 ## Description
@@ -43,7 +47,7 @@ The result is faster rendering due to better hardware utilization. On the left h
 |---------------------------|-------------------------|
 | ![before](doc/before.png) | ![after](doc/after.png) |
 
-There's a built-in benchmark that tests the first 50 frames of the scene to give an estimation of the number of instances to use. Bear in mind, that the first 50 frames might not be fully representative and you might need to adjust it to be either bigger or smaller.
+There's a built-in benchmark that tests the first 48 frames of the scene to give an estimation of the number of instances to use. Bear in mind, that the first 48 frames might not be fully representative and you might need to adjust it to be either bigger or smaller.
 
 ## Results
 
