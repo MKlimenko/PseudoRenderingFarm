@@ -26,6 +26,7 @@ def _install_fake_bpy():
     bpy.app = types.SimpleNamespace(
         background=True,
         binary_path="blender",
+        handlers=types.SimpleNamespace(persistent=lambda f: f, load_post=[]),
         timers=types.SimpleNamespace(
             is_registered=lambda f: False,
             register=lambda *args, **kwargs: None,
@@ -33,7 +34,9 @@ def _install_fake_bpy():
         ),
     )
     bpy.path = types.SimpleNamespace(abspath=lambda p: p)
-    bpy.context = types.SimpleNamespace()
+    bpy.context = types.SimpleNamespace(
+        window_manager=types.SimpleNamespace(windows=[])
+    )
     bpy.data = types.SimpleNamespace(filepath="")
     bpy.ops = types.SimpleNamespace()
     sys.modules["bpy"] = bpy
@@ -177,9 +180,7 @@ def test_unknown_extensions_are_treated_as_valid(tmp_path):
 
 
 def test_cleanup_only_touches_recent_render_output(tmp_path):
-    sys.modules["bpy"].context.scene = types.SimpleNamespace(
-        render=types.SimpleNamespace(filepath=str(tmp_path / "frame_"))
-    )
+    addon.Globals.output_dir = str(tmp_path)
     addon.Globals.start_time = time.time() - 60
 
     corrupt_new = tmp_path / "0001.png"
@@ -206,9 +207,12 @@ def test_cleanup_only_touches_recent_render_output(tmp_path):
 
 
 def test_cleanup_returns_zero_for_missing_directory(tmp_path):
-    sys.modules["bpy"].context.scene = types.SimpleNamespace(
-        render=types.SimpleNamespace(filepath=str(tmp_path / "nonexistent" / "frame_"))
-    )
+    addon.Globals.output_dir = str(tmp_path / "nonexistent")
+    assert addon.cleanup_corrupted_frames() == 0
+
+
+def test_cleanup_without_output_dir_is_a_noop():
+    addon.Globals.output_dir = ""
     assert addon.cleanup_corrupted_frames() == 0
 
 
@@ -252,6 +256,17 @@ def test_get_env_for_instance_falls_back_to_current_env():
 # --- render status timer ---
 
 
+def fake_process(returncode):
+    """Stand-in for Popen: returncode None means still running."""
+    return types.SimpleNamespace(poll=lambda: returncode, returncode=returncode)
+
+
+def make_instance(tmp_path, name, log=b"", returncode=0):
+    log_path = tmp_path / name
+    log_path.write_bytes(log)
+    return addon.Instance(fake_process(returncode), str(log_path))
+
+
 def test_check_render_status_stops_after_cancel():
     addon.Globals.active_render_processes = []
     addon.Globals.is_benchmarking = False
@@ -269,6 +284,7 @@ def _capture_benchmark_commands(tmp_path, monkeypatch, gpu_devices):
     )
     fake_bpy.data.filepath = "scene.blend"
     addon.Globals.bench_temp_dir = str(tmp_path)
+    addon.Globals.log_dir = str(tmp_path)
     addon.Globals.current_bench_instances = 2
     addon.Globals.gpu_devices = gpu_devices
     addon.Globals.gpu_devices_envs = [dict(os.environ)]
@@ -276,9 +292,9 @@ def _capture_benchmark_commands(tmp_path, monkeypatch, gpu_devices):
 
     commands = []
 
-    def fake_popen(cmd, env=None):
+    def fake_popen(cmd, env=None, **kwargs):
         commands.append(cmd)
-        return types.SimpleNamespace(poll=lambda: None)
+        return fake_process(None)
 
     monkeypatch.setattr(addon.subprocess, "Popen", fake_popen)
     addon.launch_benchmark_iteration()
@@ -302,3 +318,200 @@ def test_benchmark_splits_window_on_balanced_systems(tmp_path, monkeypatch):
     assert len(commands) == 2
     windows = [(cmd[cmd.index("-s") + 1], cmd[cmd.index("-e") + 1]) for cmd in commands]
     assert windows == [("1", "24"), ("25", "48")]
+
+
+# --- progress ---
+
+SAVED_LINE = b"00:03.073  render           | Saved: '/out/%04d.png'\n"
+SKIPPED_LINE = (
+    b'00:00.545  render           | Skipping existing frame "/out/%04d.png"\n'
+)
+
+
+def test_progress_counts_saved_frames_across_instances(tmp_path):
+    noise = b"00:01.106  render           | Fra: 2 | Rendering 64 / 64 samples\n"
+    addon.Globals.instances = [
+        make_instance(tmp_path, "a.log", noise + SAVED_LINE % 1 + SAVED_LINE % 2),
+        make_instance(tmp_path, "b.log", SAVED_LINE % 3 + noise),
+    ]
+    addon.Globals.total_frames = 10
+
+    assert addon.update_progress()
+    assert addon.Globals.frames_done == 3
+    assert not addon.update_progress(), "nothing new was logged"
+
+
+def test_progress_ignores_incomplete_lines(tmp_path):
+    instance = make_instance(tmp_path, "a.log", SAVED_LINE % 1 + b"00:04  render | Sav")
+    addon.Globals.instances = [instance]
+    addon.Globals.total_frames = 10
+
+    addon.update_progress()
+    assert addon.Globals.frames_done == 1
+
+    with open(instance.log_path, "ab") as f:
+        f.write(b"ed: '/out/0002.png'\n")
+    addon.update_progress()
+    assert addon.Globals.frames_done == 2
+
+
+def test_progress_counts_skipped_frames_only_without_placeholders(tmp_path):
+    log = SAVED_LINE % 1 + SKIPPED_LINE % 2
+    addon.Globals.total_frames = 10
+
+    addon.Globals.gpu_devices = []
+    addon.Globals.instances = [make_instance(tmp_path, "a.log", log)]
+    addon.update_progress()
+    assert addon.Globals.frames_done == 2
+
+    addon.Globals.gpu_devices = ["10de/2783/0", "8086/1234/0"]
+    addon.Globals.instances = [make_instance(tmp_path, "b.log", log)]
+    addon.update_progress()
+    assert addon.Globals.frames_done == 1
+
+
+def test_progress_is_capped_at_total(tmp_path):
+    log = b"".join(SAVED_LINE % i for i in range(1, 6))
+    addon.Globals.instances = [make_instance(tmp_path, "a.log", log)]
+    addon.Globals.total_frames = 3
+    addon.update_progress()
+    assert addon.Globals.frames_done == 3
+
+
+# --- failure detection ---
+
+
+def test_format_frame_ranges():
+    assert addon.format_frame_ranges([]) == ""
+    assert addon.format_frame_ranges([5]) == "5"
+    assert addon.format_frame_ranges([3, 4, 5, 9, 12, 13]) == "3-5, 9, 12-13"
+    assert addon.format_frame_ranges([1, 4, 7, 13], step=3) == "1-7, 13"
+    assert addon.format_frame_ranges([1, 3, 5, 7, 9, 11]) == "1, 3, 5, 7, ..."
+
+
+def _expect_frames(tmp_path, present, empty, absent):
+    """Registers the expected frames, creating only the present/empty ones."""
+    expected = {}
+    for frame in sorted(present + empty + absent):
+        path = tmp_path / f"{frame:04d}.png"
+        if frame in present:
+            path.write_bytes(b"x" * 100 + PNG_FOOTER)
+        elif frame in empty:
+            path.write_bytes(b"")
+        expected[frame] = str(path)
+    addon.Globals.expected_frames = expected
+
+
+def test_find_missing_frames(tmp_path):
+    _expect_frames(tmp_path, present=[1, 4], empty=[2], absent=[3])
+    assert addon.find_missing_frames() == [2, 3]
+
+
+def _finish_render(tmp_path, returncodes):
+    addon.Globals.is_rendering_active = True
+    addon.Globals.is_benchmarking = False
+    addon.Globals.active_render_processes = []
+    addon.Globals.output_dir = str(tmp_path)
+    addon.Globals.total_frames = len(addon.Globals.expected_frames)
+    addon.Globals.start_time = time.time() - 60
+    addon.Globals.instances = [
+        make_instance(tmp_path, f"{i}.log", returncode=code)
+        for i, code in enumerate(returncodes)
+    ]
+    assert addon.check_render_status() is None
+    assert not addon.Globals.is_rendering_active
+
+
+def test_finished_render_without_problems_has_no_error(tmp_path):
+    _expect_frames(tmp_path, present=[1, 2, 3], empty=[], absent=[])
+    _finish_render(tmp_path, [0, 0])
+    assert addon.Globals.error_msg == ""
+
+
+def test_finished_render_reports_failed_instances_and_missing_frames(tmp_path):
+    _expect_frames(tmp_path, present=[1, 2], empty=[3], absent=[4, 5, 6])
+    _finish_render(tmp_path, [0, -9])
+    assert addon.Globals.error_msg == (
+        "1 of 2 instances failed, 4 frames missing (3-6)"
+    )
+    assert not (
+        tmp_path / "0003.png"
+    ).exists(), "placeholders of a dead instance must not block a resumed render"
+
+
+def test_finished_render_reports_missing_frames_despite_clean_exit(tmp_path):
+    _expect_frames(tmp_path, present=[1], empty=[], absent=[2])
+    _finish_render(tmp_path, [0])
+    assert addon.Globals.error_msg == "1 frames missing (2)"
+
+
+def _finish_benchmark_iteration(tmp_path, instances_tested, results, returncode):
+    scene = types.SimpleNamespace(pseudo_rendering_farm_instances=0)
+    sys.modules["bpy"].context.scene = scene
+    addon.Globals.is_benchmarking = True
+    addon.Globals.is_rendering_active = False
+    addon.Globals.active_render_processes = []
+    addon.Globals.current_bench_instances = instances_tested
+    addon.Globals.benchmark_results = dict(results)
+    addon.Globals.peak_throughput = max(results.values(), default=0)
+    addon.Globals.benchmark_frames = 48
+    addon.Globals.start_time = time.time() - 1
+    addon.Globals.instances = [make_instance(tmp_path, "a.log", returncode=returncode)]
+    assert addon.check_render_status() is None
+    assert not addon.Globals.is_benchmarking
+    return scene
+
+
+def test_benchmark_stops_when_an_instance_fails(tmp_path):
+    scene = _finish_benchmark_iteration(tmp_path, 3, {1: 2.0, 2: 3.0}, returncode=1)
+    assert addon.Globals.benchmark_results[3] == 0
+    assert scene.pseudo_rendering_farm_instances == 2
+    assert "3 instances" in addon.Globals.error_msg
+
+
+def test_benchmark_fails_when_nothing_could_render(tmp_path):
+    scene = _finish_benchmark_iteration(tmp_path, 1, {}, returncode=1)
+    assert scene.pseudo_rendering_farm_instances == 0
+    assert addon.Globals.error_msg.startswith("Benchmark failed")
+
+
+# --- scene validation ---
+
+
+class Reporter:
+    def __init__(self):
+        self.reports = []
+
+    def report(self, level, message):
+        self.reports.append((level, message))
+
+
+def test_video_output_is_rejected():
+    addon.Globals.gpu_devices = []
+    reporter = Reporter()
+    render = types.SimpleNamespace(is_movie_format=True)
+    assert not addon.is_scene_configured(reporter, render)
+    assert "Video output" in reporter.reports[0][1]
+
+
+def test_image_sequence_is_accepted():
+    addon.Globals.gpu_devices = []
+    reporter = Reporter()
+    render = types.SimpleNamespace(is_movie_format=False)
+    assert addon.is_scene_configured(reporter, render)
+    assert not reporter.reports
+
+
+# --- file load ---
+
+
+def test_loading_a_file_aborts_the_benchmark_but_not_the_render():
+    addon.Globals.active_render_processes = []
+    addon.Globals.is_benchmarking = True
+    addon.Globals.is_rendering_active = False
+    addon.on_file_loaded(None)
+    assert not addon.Globals.is_benchmarking
+
+    addon.Globals.is_rendering_active = True
+    addon.on_file_loaded(None)
+    assert addon.Globals.is_rendering_active
